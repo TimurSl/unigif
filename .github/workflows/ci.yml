@@ -52,6 +52,27 @@ jobs:
           echo "gzipped JS: $total bytes"
           test "$total" -le 150000
 
+  e2e:
+    # Playwright against a real server binary (with ffmpeg) in a throwaway data directory.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: npm ci && npm run build
+        working-directory: web
+      - run: cargo build
+      - run: npx playwright install --with-deps chromium
+        working-directory: web
+      - run: npm run e2e
+        working-directory: web
+
   nix:
     runs-on: ubuntu-latest
     steps:
