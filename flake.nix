@@ -53,8 +53,11 @@
             dir=$(mktemp -d)
             trap 'rm -rf "$dir"' EXIT INT TERM
             export UNIGIF_DATA_DIR="$dir/data" UNIGIF_CACHE_DIR="$dir/cache"
-            export UNIGIF_AUTH__BOOTSTRAP_TOKEN="''${UNIGIF_AUTH__BOOTSTRAP_TOKEN:-dev}"
-            echo "unigif: temporary data in $dir, API token: $UNIGIF_AUTH__BOOTSTRAP_TOKEN"
+            pw="''${UNIGIF_DEV_PASSWORD:-dev-password}"
+            printf '%s\n' "$pw" > "$dir/owner-password"
+            export UNIGIF_AUTH__INITIAL_OWNER__USERNAME=dev
+            export UNIGIF_AUTH__INITIAL_OWNER__PASSWORD_FILE="$dir/owner-password"
+            echo "unigif: temporary data in $dir; log in as dev / $pw"
             ${self.packages.${pkgs.stdenv.hostPlatform.system}.unigif}/bin/unigif serve
           ''}";
         };

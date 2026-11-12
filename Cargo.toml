@@ -10,6 +10,7 @@ build = "build.rs"
 
 [dependencies]
 anyhow = "1"
+argon2 = "0.5"
 axum = { version = "0.8", features = ["multipart", "macros"] }
 base64 = "0.22"
 bytes = "1"
@@ -19,26 +20,39 @@ figment = { version = "0.10", features = ["toml", "env"] }
 futures-util = "0.3"
 infer = "0.19"
 rand = "0.9"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+rpassword = "7"
 rust-embed = "8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_urlencoded = "0.7"
+serde_yaml = "0.9"
 sha2 = "0.10"
 sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio", "migrate", "macros"] }
 subtle = "2"
 thiserror = "2"
 thumbhash = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "fs", "signal", "sync", "time", "io-util"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-util = { version = "0.7", features = ["io"] }
 tower = { version = "0.5", features = ["util"] }
-time = { version = "0.3", features = ["formatting"] }
+time = { version = "0.3", features = ["formatting", "parsing"] }
 tower-http = { version = "0.6", features = ["trace", "compression-gzip", "cors", "limit", "set-header"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 unicode-normalization = "0.1"
+url = "2"
 
 [dev-dependencies]
+jsonschema = { version = "0.30", default-features = false }
 tempfile = "3"
 http-body-util = "0.1"
+
+# Argon2 is unusably slow unoptimised, which would make every login test crawl.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3
 
 [profile.release]
 lto = "thin"

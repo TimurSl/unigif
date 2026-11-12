@@ -83,8 +83,15 @@ pub async fn run(cfg: &Config) -> Result<Report> {
         Err(e) => r.push(false, format!("database: {e:#}")),
     }
 
-    if cfg.auth.bootstrap_token.as_deref().unwrap_or("").is_empty() {
-        r.push(true, "auth.bootstrapToken is not set: every /api/v1 request will be refused");
+    if let Ok(db) = crate::db::open(&cfg.db_path()).await {
+        match crate::db::users::count(&db).await {
+            Ok(0) => r.push(
+                true,
+                "no user exists yet: run `unigif user add <name>` (or set auth.initialOwner) so you can log in",
+            ),
+            Ok(n) => r.push(true, format!("{n} user(s) can log in")),
+            Err(e) => r.push(false, format!("reading users: {e}")),
+        }
     }
     Ok(r)
 }

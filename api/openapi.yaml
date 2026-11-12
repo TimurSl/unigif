@@ -1,0 +1,824 @@
+openapi: 3.1.0
+info:
+  title: Unigif API
+  version: "1.0"
+  license: {name: MIT, identifier: MIT}
+  description: |
+    A hashtag-first GIF library. Every GIF carries hashtags; a GIF without any is "unsorted".
+
+    Authentication: send an API key as `Authorization: Bearer ugf_…` (or `X-API-Key`). The owner's web
+    session uses the `unigif_session` cookie instead. Keys in query strings are rejected.
+    Each operation lists the scope it needs (`x-scope`); a login session has every scope.
+
+    Errors are `application/problem+json` with a stable `code`. Lists are cursor-paginated:
+    `?limit=50&cursor=…` returns `{items, next_cursor}`. Rate-limited responses are `429` with
+    `Retry-After`; every authenticated key response carries `RateLimit-Limit`, `RateLimit-Remaining`
+    and `RateLimit-Reset`.
+
+    Media files are public by their unguessable URL (`/m/{id}/{variant}`); listing and search always need a key.
+servers:
+  - url: /
+tags:
+  - {name: gifs}
+  - {name: tags}
+  - {name: keys}
+  - {name: auth}
+  - {name: system}
+security:
+  - bearer: []
+  - session: []
+paths:
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Log in as the owner and receive a session cookie
+      description: Five failed attempts per minute per client address lock that address out, for longer each time.
+      x-scope: none
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/LoginRequest'}
+      responses:
+        "200":
+          description: 'Logged in; the response sets the `unigif_session` cookie'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LoginResult'}
+        "400": {$ref: '#/components/responses/Problem'}
+        "401": {$ref: '#/components/responses/Problem'}
+        "429": {$ref: '#/components/responses/Problem'}
+  /auth/logout:
+    post:
+      tags: [auth]
+      summary: End the current session
+      x-scope: session
+      responses:
+        "204": {description: Logged out}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
+  /auth/password:
+    post:
+      tags: [auth]
+      summary: Change the owner's password; every other session is ended
+      x-scope: session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PasswordRequest'}
+      responses:
+        "204": {description: Changed}
+        "400": {$ref: '#/components/responses/Problem'}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
+  /auth/sessions:
+    get:
+      tags: [auth]
+      summary: List the owner's active sessions
+      x-scope: session
+      responses:
+        "200":
+          description: Sessions
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SessionList'}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
+  /auth/sessions/{id}:
+    delete:
+      tags: [auth]
+      summary: Revoke a session
+      x-scope: session
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}, description: Session id from the listing}
+      responses:
+        "204": {description: Revoked}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
+        "404": {$ref: '#/components/responses/Problem'}
+  /me:
+    get:
+      tags: [auth]
+      summary: Who am I
+      description: The user or key name, scopes, hidden hashtags and rate limits.
+      x-scope: any
+      responses:
+        "200":
+          description: The caller
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Me'}
+        "401": {$ref: '#/components/responses/Problem'}
+    patch:
+      tags: [auth]
+      summary: Replace the owner's preferences (for example `proceed_to_next`)
+      x-scope: session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [prefs]
+              properties:
+                prefs: {type: object, additionalProperties: true}
+      responses:
+        "200":
+          description: The caller
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Me'}
+        "400": {$ref: '#/components/responses/Problem'}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
+  /gifs:
+    get:
+      tags: [gifs]
+      summary: List and search GIFs
+      description: |
+        `q=cat funny` means GIFs that carry both hashtags; the last word is matched as a prefix while
+        it is still being typed (end it with a space to make it exact). `-dog` excludes a hashtag.
+      x-scope: read
+      parameters:
+        - {name: q, in: query, schema: {type: string}, description: Search words}
+        - {name: tag, in: query, schema: {type: string}, style: form, explode: true, description: A hashtag the GIF must carry; repeatable}
+        - {name: unsorted, in: query, schema: {type: boolean}, description: Only GIFs without hashtags}
+        - {name: sort, in: query, schema: {type: string, enum: [new, old, used], default: new}, description: "`used` orders by use count, then recency"}
+        - {name: status, in: query, schema: {type: string, default: "ready,processing"}, description: Comma-separated statuses to include}
+        - {name: trash, in: query, schema: {type: boolean}, description: List the trash instead (needs the delete scope)}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}
+        - {name: cursor, in: query, schema: {type: string}}
+      responses:
+        "200":
+          description: A page of GIFs
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/GifPage'}
+        "400": {$ref: '#/components/responses/Problem'}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
+        "429": {$ref: '#/components/responses/Problem'}
+    post:
+      tags: [gifs]
+      summary: Quick add
+      description: |
+        Three body types, one endpoint. A raw body (`Content-Type: video/mp4`, `image/gif`, …), multipart
+        (field `file`), or JSON `{"url": …}` which the server fetches itself with SSRF protection.
+        Tags, source and wait can go in the query string, form fields, or the JSON body.
+        Sending the same bytes (or the same `source` + `source_id`) again returns the existing item with
+        `duplicate: true`; any tags sent are merged in.
+      x-scope: upload
+      parameters:
+        - {name: tags, in: query, schema: {type: string}, description: Hashtags separated by commas or spaces}
+        - {name: source, in: query, schema: {type: string, enum: [web, api, url, share, telegram, import]}}
+        - {name: source_id, in: query, schema: {type: string, maxLength: 256}, description: Makes retries idempotent}
+        - {name: description, in: query, schema: {type: string, maxLength: 2000}}
+        - {name: wait, in: query, schema: {type: integer, minimum: 0, maximum: 60, default: 10}, description: Seconds to wait for processing}
+      requestBody:
+        required: true
+        content:
+          application/octet-stream: {schema: {type: string, format: binary}}
+          video/mp4: {schema: {type: string, format: binary}}
+          image/gif: {schema: {type: string, format: binary}}
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: {type: string, format: binary}
+                tags: {type: string}
+                source: {type: string}
+                source_id: {type: string}
+                description: {type: string}
+                wait: {type: integer}
+          application/json:
+            schema: {$ref: '#/components/schemas/AddByUrl'}
+      responses:
+        "200":
+          description: 'Already in the library (`duplicate: true`)'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Gif'}
+        "201":
+          description: Created; `status` is `processing` if the wait ran out
+          headers:
+            Location: {schema: {type: string}}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Gif'}
+        "400": {$ref: '#/components/responses/Problem'}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
+        "413": {$ref: '#/components/responses/Problem'}
+        "415": {$ref: '#/components/responses/Problem'}
+        "422": {$ref: '#/components/responses/Problem'}
+        "429": {$ref: '#/components/responses/Problem'}
+        "502": {$ref: '#/components/responses/Problem'}
+  /gifs/unsorted/next:
+    get:
+      tags: [gifs]
+      summary: The next unsorted GIF after `after`, and how many are left
+      description: '`after` may already have been sorted; it only marks a position in the queue.'
+      x-scope: read
+      parameters:
+        - {name: after, in: query, schema: {type: string}, description: Id of the GIF just handled}
+        - {name: sort, in: query, schema: {type: string, enum: [new, old], default: new}}
+      responses:
+        "200":
+          description: The next item (`null` at the end of the queue)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UnsortedNext'}
+        "400": {$ref: '#/components/responses/Problem'}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
+  /gifs/batch:
+    post:
+      tags: [gifs]
+      summary: Change hashtags on, or trash, many GIFs at once
+      description: All or nothing. `add`/`remove` need the tag scope, `trash` the delete scope. At most 500 ids.
+      x-scope: tag
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/BatchRequest'}
+      responses:
+        "200":
+          description: Result
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BatchResult'}
+        "400": {$ref: '#/components/responses/Problem'}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
+  /gifs/{id}:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string}}
+    get:
+      tags: [gifs]
+      summary: One GIF
+      x-scope: read
+      responses:
+        "200":
+          description: The GIF
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Gif'}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
+        "404": {$ref: '#/components/responses/Problem'}
+    patch:
+      tags: [gifs]
+      summary: Replace the hashtags and/or set the description
+      x-scope: tag
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PatchGif'}
+      responses:
+        "200":
+          description: The GIF
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Gif'}
+        "400": {$ref: '#/components/responses/Problem'}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
+        "404": {$ref: '#/components/responses/Problem'}
+    delete:
+      tags: [gifs]
+      summary: Move to the trash (purged after 30 days)
+      x-scope: delete
+      responses:
+        "204": {description: Trashed}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
+        "404": {$ref: '#/components/responses/Problem'}
+  /gifs/{id}/tags:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string}}
+    post:
+      tags: [gifs]
+      summary: Add and/or remove hashtags
+      x-scope: tag
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/TagEdit'}
+      responses:
+        "200":
+          description: The GIF
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Gif'}
+        "400": {$ref: '#/components/responses/Problem'}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
+        "404": {$ref: '#/components/responses/Problem'}
+  /gifs/{id}/restore:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string}}
+    post:
+      tags: [gifs]
+      summary: Take a GIF out of the trash
+      x-scope: delete
+      responses:
+        "200":
+          description: The GIF
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Gif'}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
+        "404": {$ref: '#/components/responses/Problem'}
+  /gifs/{id}/use:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string}}
+    post:
+      tags: [gifs]
+      summary: Usage ping, sent when a GIF is posted; feeds `sort=used`
+      x-scope: read
+      responses:
+        "204": {description: Counted}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
+        "404": {$ref: '#/components/responses/Problem'}
+  /tags:
+    get:
+      tags: [tags]
+      summary: List hashtags
+      x-scope: read
+      parameters:
+        - {name: q, in: query, schema: {type: string}, description: Prefix}
+        - {name: sort, in: query, schema: {type: string, enum: [recent, popular, alpha], default: alpha}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 1000, default: 100}}
+        - {name: cursor, in: query, schema: {type: string}}
+      responses:
+        "200":
+          description: A page of hashtags
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TagPage'}
+        "400": {$ref: '#/components/responses/Problem'}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
+  /tags/suggest:
+    get:
+      tags: [tags]
+      summary: Recent hashtags, plus those that often appear with the selected ones
+      description: In `related`, `gif_count` is the number of GIFs carrying both the selected hashtags and that one.
+      x-scope: read
+      parameters:
+        - {name: selected, in: query, schema: {type: string}, description: Comma-separated hashtags already chosen}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 50, default: 12}}
+      responses:
+        "200":
+          description: Suggestions
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Suggestions'}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
+  /tags/{name}:
+    parameters:
+      - {name: name, in: path, required: true, schema: {type: string}}
+    patch:
+      tags: [tags]
+      summary: Rename a hashtag
+      description: Fails with `409` when the new name exists; merge instead. Not available to keys with hidden hashtags.
+      x-scope: tag
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: {type: string}
+      responses:
+        "200":
+          description: The renamed hashtag
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Tag'}
+        "400": {$ref: '#/components/responses/Problem'}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
+        "404": {$ref: '#/components/responses/Problem'}
+        "409": {$ref: '#/components/responses/Problem'}
+    delete:
+      tags: [tags]
+      summary: Remove a hashtag from every GIF
+      x-scope: tag
+      responses:
+        "204": {description: Removed}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
+        "404": {$ref: '#/components/responses/Problem'}
+  /tags/{name}/merge:
+    parameters:
+      - {name: name, in: path, required: true, schema: {type: string}}
+    post:
+      tags: [tags]
+      summary: Move every GIF of this hashtag onto another one and delete it
+      x-scope: tag
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [into]
+              properties:
+                into: {type: string}
+      responses:
+        "200":
+          description: The target hashtag
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Tag'}
+        "400": {$ref: '#/components/responses/Problem'}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
+        "404": {$ref: '#/components/responses/Problem'}
+  /keys:
+    get:
+      tags: [keys]
+      summary: List API keys
+      x-scope: admin
+      parameters:
+        - {name: include_revoked, in: query, schema: {type: boolean, default: false}}
+      responses:
+        "200":
+          description: Keys (never their secrets)
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/KeyList'}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
+    post:
+      tags: [keys]
+      summary: Create an API key
+      description: |
+        Send `preset` (`read_only`, `uploader`, `picker`, `full`) or `scopes`. The full key is in the
+        response once and is never shown again.
+      x-scope: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateKey'}
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/KeyCreated'}
+        "400": {$ref: '#/components/responses/Problem'}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
+  /keys/{id}:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string}}
+    patch:
+      tags: [keys]
+      summary: Change a key's name, scopes, hidden hashtags, rate limit or expiry
+      x-scope: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PatchKey'}
+      responses:
+        "200":
+          description: The key
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Key'}
+        "400": {$ref: '#/components/responses/Problem'}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
+        "404": {$ref: '#/components/responses/Problem'}
+    delete:
+      tags: [keys]
+      summary: Revoke a key
+      x-scope: admin
+      responses:
+        "204": {description: Revoked}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
+        "404": {$ref: '#/components/responses/Problem'}
+  /stats:
+    get:
+      tags: [system]
+      summary: Counts and storage totals, over the GIFs the caller can see
+      x-scope: read
+      responses:
+        "200":
+          description: Statistics
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Stats'}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
+  /events:
+    get:
+      tags: [system]
+      summary: Server-sent events
+      description: |
+        `gif.added`, `gif.ready`, `gif.tagged`, `gif.deleted`; each `data` is `{"id": "…"}`. A subscriber that falls
+        behind receives `resync` and should reload. Events about GIFs the key cannot see are not sent.
+      x-scope: read
+      responses:
+        "200":
+          description: An event stream
+          content:
+            text/event-stream:
+              schema: {type: string}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
+  /openapi.json:
+    get:
+      tags: [system]
+      summary: This document
+      x-scope: none
+      security: []
+      responses:
+        "200":
+          description: The OpenAPI document
+          content:
+            application/json:
+              schema: {type: object}
+components:
+  securitySchemes:
+    bearer: {type: http, scheme: bearer, description: "An API key: ugf_<id>_<secret>"}
+    session: {type: apiKey, in: cookie, name: unigif_session}
+  responses:
+    Problem:
+      description: An error
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+  schemas:
+    Problem:
+      type: object
+      required: [type, title, status, detail, code]
+      properties:
+        type: {type: string}
+        title: {type: string}
+        status: {type: integer}
+        detail: {type: string}
+        code:
+          type: string
+          description: "Stable: bad_request, unauthorized, invalid_credentials, forbidden, scope_required, not_found, conflict, too_large, unsupported_media, invalid_media, rate_limited, fetch_failed, internal"
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: {type: string}
+        password: {type: string}
+    LoginResult:
+      type: object
+      required: [user]
+      properties:
+        user:
+          type: object
+          required: [id, username]
+          properties:
+            id: {type: integer}
+            username: {type: string}
+    PasswordRequest:
+      type: object
+      required: [current, new]
+      properties:
+        current: {type: string}
+        new: {type: string, minLength: 8}
+    Session:
+      type: object
+      required: [id, user_agent, ip, created_at, last_seen_at, expires_at, current]
+      properties:
+        id: {type: string}
+        user_agent: {type: [string, "null"]}
+        ip: {type: [string, "null"]}
+        created_at: {type: string, format: date-time}
+        last_seen_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}
+        current: {type: boolean}
+    SessionList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/Session'}
+    Me:
+      type: object
+      required: [kind, name, scopes, deny_tags, limits]
+      properties:
+        kind: {type: string, enum: [user, key]}
+        name: {type: string}
+        user_id: {type: integer}
+        key_id: {type: string}
+        scopes:
+          type: array
+          items: {$ref: '#/components/schemas/Scope'}
+        deny_tags:
+          type: array
+          items: {type: string}
+        limits:
+          type: [object, "null"]
+          description: Requests per minute; null for the owner, who is not limited
+          properties:
+            read_per_min: {type: integer}
+            upload_per_min: {type: integer}
+        prefs: {type: object, additionalProperties: true}
+    Scope:
+      type: string
+      enum: [read, upload, tag, delete, admin]
+    MediaFile:
+      type: object
+      required: [url, width, height, bytes]
+      properties:
+        url: {type: string}
+        width: {type: [integer, "null"]}
+        height: {type: [integer, "null"]}
+        bytes: {type: integer}
+    Media:
+      type: object
+      required: [mp4, preview_mp4, poster]
+      properties:
+        mp4:
+          oneOf: [{$ref: '#/components/schemas/MediaFile'}, {type: "null"}]
+        preview_mp4:
+          oneOf: [{$ref: '#/components/schemas/MediaFile'}, {type: "null"}]
+        poster:
+          oneOf: [{$ref: '#/components/schemas/MediaFile'}, {type: "null"}]
+    Gif:
+      type: object
+      required: [id, status, tags, description, width, height, duration_ms, has_alpha, thumbhash, source, created_at, sorted_at, media]
+      properties:
+        id: {type: string, minLength: 12, maxLength: 12}
+        status: {type: string, enum: [processing, ready, failed]}
+        tags:
+          type: array
+          items: {type: string}
+        description: {type: [string, "null"]}
+        width: {type: [integer, "null"]}
+        height: {type: [integer, "null"]}
+        duration_ms: {type: [integer, "null"]}
+        has_alpha: {type: boolean}
+        thumbhash: {type: [string, "null"], description: Base64 ThumbHash placeholder}
+        source:
+          type: object
+          required: [type, id]
+          properties:
+            type: {type: string}
+            id: {type: [string, "null"]}
+        created_at: {type: string, format: date-time}
+        sorted_at: {type: [string, "null"], format: date-time, description: Null while the GIF has no hashtags}
+        media:
+          oneOf: [{$ref: '#/components/schemas/Media'}, {type: "null"}]
+        duplicate: {type: boolean, description: Present and true when the upload matched an existing GIF}
+    GifPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/Gif'}
+        next_cursor: {type: [string, "null"]}
+    AddByUrl:
+      type: object
+      required: [url]
+      properties:
+        url: {type: string, format: uri}
+        tags:
+          oneOf:
+            - {type: array, items: {type: string}}
+            - {type: string}
+        source: {type: string}
+        source_id: {type: string}
+        description: {type: string}
+        wait: {type: integer}
+    PatchGif:
+      type: object
+      properties:
+        tags:
+          oneOf:
+            - {type: array, items: {type: string}}
+            - {type: string}
+        description: {type: [string, "null"]}
+    TagEdit:
+      type: object
+      properties:
+        add: {type: array, items: {type: string}}
+        remove: {type: array, items: {type: string}}
+    BatchRequest:
+      type: object
+      required: [ids]
+      properties:
+        ids: {type: array, items: {type: string}, minItems: 1, maxItems: 500}
+        add: {type: array, items: {type: string}}
+        remove: {type: array, items: {type: string}}
+        trash: {type: boolean}
+    BatchResult:
+      type: object
+      required: [updated, not_found]
+      properties:
+        updated: {type: integer}
+        not_found: {type: array, items: {type: string}}
+    UnsortedNext:
+      type: object
+      required: [item, remaining, total]
+      properties:
+        item:
+          oneOf: [{$ref: '#/components/schemas/Gif'}, {type: "null"}]
+        remaining: {type: integer, description: Unsorted GIFs after this one in the queue}
+        total: {type: integer, description: All unsorted GIFs}
+    Tag:
+      type: object
+      required: [name, gif_count, last_used_at]
+      properties:
+        name: {type: string}
+        gif_count: {type: integer}
+        last_used_at: {type: [string, "null"], format: date-time}
+    TagPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/Tag'}
+        next_cursor: {type: [string, "null"]}
+    Suggestions:
+      type: object
+      required: [recent, related]
+      properties:
+        recent: {type: array, items: {$ref: '#/components/schemas/Tag'}}
+        related: {type: array, items: {$ref: '#/components/schemas/Tag'}}
+    Key:
+      type: object
+      required: [id, name, scopes, deny_tags, rate_limit, created_at, expires_at, last_used_at, revoked_at]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        scopes:
+          type: array
+          items: {$ref: '#/components/schemas/Scope'}
+        deny_tags: {type: array, items: {type: string}}
+        rate_limit: {type: [integer, "null"]}
+        created_at: {type: string, format: date-time}
+        expires_at: {type: [string, "null"], format: date-time}
+        last_used_at: {type: [string, "null"], format: date-time}
+        revoked_at: {type: [string, "null"], format: date-time}
+    KeyCreated:
+      allOf:
+        - {$ref: '#/components/schemas/Key'}
+        - type: object
+          required: [key]
+          properties:
+            key: {type: string, description: "The full key, shown once"}
+    KeyList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/Key'}
+    CreateKey:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 100}
+        preset: {type: string, enum: [read_only, uploader, picker, full]}
+        scopes: {type: array, items: {$ref: '#/components/schemas/Scope'}}
+        deny_tags: {type: array, items: {type: string}, description: GIFs carrying any of these are invisible to the key}
+        rate_limit: {type: [integer, "null"], minimum: 1, description: Requests per minute, replacing the defaults}
+        expires_at: {type: string, format: date-time}
+        expires_in_days: {type: integer, minimum: 1}
+    PatchKey:
+      type: object
+      properties:
+        name: {type: string}
+        preset: {type: string, enum: [read_only, uploader, picker, full]}
+        scopes: {type: array, items: {$ref: '#/components/schemas/Scope'}}
+        deny_tags: {type: array, items: {type: string}}
+        rate_limit: {type: [integer, "null"]}
+        expires_at: {type: [string, "null"], format: date-time}
+    Stats:
+      type: object
+      required: [gifs, unsorted, tags, trash, bytes_stored, bytes_original, bytes_saved]
+      properties:
+        gifs: {type: integer}
+        unsorted: {type: integer}
+        tags: {type: integer}
+        trash: {type: integer}
+        bytes_stored: {type: integer}
+        bytes_original: {type: integer}
+        bytes_saved: {type: integer}

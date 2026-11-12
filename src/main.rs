@@ -6,9 +6,12 @@ use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
 use unigif::app::{App, AppState};
+use unigif::auth::keys::{self, MintParams};
+use unigif::auth::{accounts, Scopes};
 use unigif::config::Config;
+use unigif::db::{keys as key_db, now_ms, users};
 use unigif::ingest::worker;
-use unigif::{api, db, doctor, import};
+use unigif::{api, db, doctor, import, janitor, tags};
 
 #[derive(Parser)]
 #[command(name = "unigif", version, about = "Self-hosted, hashtag-first GIF library")]
@@ -26,6 +29,12 @@ enum Command {
     Serve,
     /// Check that ffmpeg, the data directories and the database are usable.
     Doctor,
+    /// Manage owner accounts.
+    #[command(subcommand)]
+    User(UserCommand),
+    /// Manage API keys.
+    #[command(subcommand)]
+    Key(KeyCommand),
     /// Bulk-import a folder of GIFs and videos.
     Import {
         dir: PathBuf,
@@ -33,6 +42,69 @@ enum Command {
         #[arg(long)]
         tags_from_folders: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum UserCommand {
+    /// Create an account. The password is prompted for, read from stdin when
+    /// piped, or read from --password-file.
+    Add {
+        name: String,
+        #[arg(long)]
+        password_file: Option<PathBuf>,
+    },
+    /// Set a new password (and log the user out everywhere).
+    Passwd {
+        name: String,
+        #[arg(long)]
+        password_file: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum KeyCommand {
+    /// Mint a key and print it once on stdout.
+    Create {
+        #[arg(long)]
+        name: String,
+        /// Scopes, space or comma separated: read upload tag delete admin.
+        #[arg(long, conflicts_with = "preset")]
+        scopes: Option<String>,
+        /// read_only, uploader, picker or full.
+        #[arg(long)]
+        preset: Option<String>,
+        /// Hashtags whose GIFs the key can never see.
+        #[arg(long, value_delimiter = ',')]
+        deny_tags: Vec<String>,
+        /// Requests per minute.
+        #[arg(long)]
+        rate_limit: Option<i64>,
+        #[arg(long)]
+        expires_days: Option<u32>,
+    },
+    /// List keys.
+    List,
+    /// Revoke a key by id.
+    Revoke { id: String },
+}
+
+/// A password from a file, a prompt, or a pipe.
+fn read_password(file: Option<&std::path::Path>, confirm: bool) -> Result<String> {
+    use std::io::{IsTerminal, Read};
+    if let Some(f) = file {
+        let raw = std::fs::read_to_string(f).with_context(|| format!("reading {}", f.display()))?;
+        return Ok(raw.lines().next().unwrap_or("").to_string());
+    }
+    if std::io::stdin().is_terminal() {
+        let pw = rpassword::prompt_password("Password: ")?;
+        if confirm && rpassword::prompt_password("Repeat password: ")? != pw {
+            anyhow::bail!("the passwords do not match");
+        }
+        return Ok(pw);
+    }
+    let mut raw = String::new();
+    std::io::stdin().read_to_string(&mut raw)?;
+    Ok(raw.lines().next().unwrap_or("").to_string())
 }
 
 #[tokio::main]
@@ -60,6 +132,66 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             }
             Ok(if report.ok() { ExitCode::SUCCESS } else { ExitCode::FAILURE })
         }
+        Command::User(cmd) => {
+            let app = start(cfg, false).await?;
+            match cmd {
+                UserCommand::Add { name, password_file } => {
+                    let pw = read_password(password_file.as_deref(), true)?;
+                    accounts::create_user(&app.db, &name, &pw).await?;
+                    println!("created user {name}");
+                }
+                UserCommand::Passwd { name, password_file } => {
+                    let pw = read_password(password_file.as_deref(), true)?;
+                    accounts::set_password(&app.db, &name, &pw).await?;
+                    println!("password updated for {name}; all sessions were ended");
+                }
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Key(cmd) => {
+            let app = start(cfg, false).await?;
+            match cmd {
+                KeyCommand::Create { name, scopes, preset, deny_tags, rate_limit, expires_days } => {
+                    let scopes = match (scopes, preset) {
+                        (Some(s), None) => Scopes::parse_list(&s).map_err(anyhow::Error::msg)?,
+                        (None, Some(p)) => Scopes::preset(&p)
+                            .context("preset must be read_only, uploader, picker or full")?,
+                        _ => anyhow::bail!("give --scopes or --preset"),
+                    };
+                    let owner = users::first(&app.db)
+                        .await?
+                        .context("no user exists yet; run `unigif user add <name>` first")?;
+                    let (row, token) = keys::mint(
+                        &app.db,
+                        MintParams {
+                            name: keys::validate_name(&name).map_err(anyhow::Error::msg)?,
+                            scopes,
+                            deny_tags: tags::normalize_all(&deny_tags)?,
+                            rate_limit: keys::validate_rate_limit(rate_limit).map_err(anyhow::Error::msg)?,
+                            expires_at: expires_days.map(|d| now_ms() + d as i64 * 86_400_000),
+                            created_by: owner.id,
+                        },
+                    )
+                    .await?;
+                    eprintln!("created key {} ({}) with scopes: {}", row.id, row.name, row.scopes);
+                    eprintln!("This is the only time the key is shown:");
+                    println!("{token}");
+                }
+                KeyCommand::List => {
+                    for k in key_db::list(&app.db, false).await? {
+                        println!("{}  {:<24} {}", k.id, k.name, k.scopes);
+                    }
+                }
+                KeyCommand::Revoke { id } => {
+                    if key_db::revoke(&app.db, &id, now_ms()).await? {
+                        println!("revoked {id}");
+                    } else {
+                        anyhow::bail!("no live key with id {id}");
+                    }
+                }
+            }
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Import { dir, tags_from_folders } => {
             // No crash recovery here: it wipes tmp/ and re-queues running jobs,
             // which would clobber a server running against the same data dir.
@@ -85,6 +217,7 @@ async fn start(cfg: Config, recover: bool) -> Result<App> {
         tokio::fs::create_dir_all(&dir).await.with_context(|| format!("creating {}", dir.display()))?;
     }
     let pool = db::open(&cfg.db_path()).await?;
+    accounts::ensure_initial_owner(&cfg, &pool).await?;
     let app = AppState::new(cfg, pool);
     if recover {
         worker::recover(&app).await?;
@@ -96,14 +229,15 @@ async fn serve(cfg: Config) -> Result<()> {
     let listen = cfg.listen.clone();
     let app = start(cfg, true).await?;
     worker::spawn(&app, app.cfg.media.concurrency);
-    if app.cfg.auth.bootstrap_token.as_deref().unwrap_or("").is_empty() {
-        tracing::warn!("auth.bootstrapToken is not set: every /api/v1 request will be refused");
+    janitor::spawn(&app);
+    if users::count(&app.db).await? == 0 {
+        tracing::warn!("no user exists yet: run `unigif user add <name>` (or set auth.initialOwner) to be able to log in");
     }
 
     let listener =
         tokio::net::TcpListener::bind(&listen).await.with_context(|| format!("binding {listen}"))?;
     tracing::info!("listening on http://{}", listener.local_addr()?);
-    axum::serve(listener, api::router(app))
+    axum::serve(listener, api::router(app).into_make_service_with_connect_info::<std::net::SocketAddr>())
         .with_graceful_shutdown(shutdown_signal())
         .await
         .context("server error")

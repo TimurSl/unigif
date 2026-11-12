@@ -114,7 +114,7 @@ async fn trashed_items_are_not_served() {
 }
 
 #[tokio::test]
-async fn api_requires_the_token() {
+async fn api_requires_a_key() {
     let h = Harness::new().await;
     let v = ready_gif(&h).await;
     let id = v["id"].as_str().unwrap();
@@ -122,23 +122,20 @@ async fn api_requires_the_token() {
     let no_auth = Request::get(format!("/api/v1/gifs/{id}")).body(Body::empty()).unwrap();
     assert_eq!(h.send(no_auth).await.status(), StatusCode::UNAUTHORIZED);
 
-    let wrong = Request::get(format!("/api/v1/gifs/{id}"))
-        .header("authorization", "Bearer nope")
-        .body(Body::empty())
-        .unwrap();
-    assert_eq!(h.send(wrong).await.status(), StatusCode::UNAUTHORIZED);
+    for bad in ["Bearer nope", "Bearer ugf_abcdefgh_abcdefghijklmnopqrstuvwxyzABCDEF", "Basic abc"] {
+        let wrong = Request::get(format!("/api/v1/gifs/{id}"))
+            .header("authorization", bad)
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(h.send(wrong).await.status(), StatusCode::UNAUTHORIZED, "{bad}");
+    }
 
     let x_api_key =
-        Request::get(format!("/api/v1/gifs/{id}")).header("x-api-key", TOKEN).body(Body::empty()).unwrap();
+        Request::get(format!("/api/v1/gifs/{id}")).header("x-api-key", &h.token).body(Body::empty()).unwrap();
     assert_eq!(h.send(x_api_key).await.status(), StatusCode::OK);
 
     let post_no_auth = Request::post("/api/v1/gifs").body(Body::from("x")).unwrap();
     assert_eq!(h.send(post_no_auth).await.status(), StatusCode::UNAUTHORIZED);
-
-    // With no token configured, everything is refused.
-    let h2 = Harness::with(|c| c.auth.bootstrap_token = None).await;
-    let resp = h2.send(h2.get(&format!("/api/v1/gifs/{id}"))).await;
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]

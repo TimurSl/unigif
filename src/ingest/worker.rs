@@ -131,6 +131,7 @@ async fn execute(app: &App, job: Job) -> Result<()> {
                 .bind(job.id)
                 .execute(&app.db)
                 .await?;
+            app.emit("gif.ready", &gif_id);
         }
         Err(e) => {
             let msg = format!("{e:#}");
@@ -209,7 +210,7 @@ async fn finalize(app: &App, id: &str, kind: SourceKind, src: &std::path::Path, 
     if let Some((_, b)) = &original {
         stored += b;
     }
-    let mut tx = app.db.begin().await?;
+    let mut tx = crate::db::begin_write(&app.db).await?;
     sqlx::query(
         "UPDATE gifs SET status = 'ready', width = ?, height = ?, duration_ms = ?, has_alpha = ?,
                 original_kept = ?, bytes_stored = ?, thumbhash = ?, phash = ? WHERE id = ?",
