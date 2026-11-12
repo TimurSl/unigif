@@ -24,7 +24,6 @@ pkgs.testers.runNixOSTest {
         };
         backup.enable = true;
         settings = {
-          media.preset = "ultrafast";
           upload.maxSize = "20MiB";
         };
       };
@@ -108,7 +107,7 @@ pkgs.testers.runNixOSTest {
 
     with subtest("3. quick add: H.264 and smaller than the source"):
         machine.succeed(
-            "ffmpeg -v error -f lavfi -i 'testsrc=size=320x240:rate=10' -t 3 -y /tmp/fixture.gif"
+            "ffmpeg -v error -f lavfi -i 'testsrc2=size=320x240:rate=10:duration=1.5'  -y /tmp/fixture.gif"
         )
         src_size = int(machine.succeed("stat -c %s /tmp/fixture.gif").strip())
         _, gif = api("POST", "/api/v1/gifs?wait=60", token=upload_key, ctype="image/gif",
