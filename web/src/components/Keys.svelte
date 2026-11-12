@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { copyText } from '../lib/actions';
-  import { api, ApiError, type ApiKey, type KeyPreset } from '../lib/api';
+  import { api, ApiError, type ApiKey, type KeyPreset, type Scope } from '../lib/api';
   import { app, errorText, toast } from '../lib/app.svelte';
   import { parseTags } from '../lib/hashtags';
 
@@ -31,7 +31,16 @@
 
   // The create form.
   let name = $state('');
-  let preset: KeyPreset = $state('read_only');
+  let preset: KeyPreset | 'custom' = $state('read_only');
+  /** "Custom" access: any combination of scopes, including admin (which can manage keys). */
+  const allScopes: { id: Scope; help: string }[] = [
+    { id: 'read', help: 'list, search and open GIFs' },
+    { id: 'upload', help: 'add GIFs' },
+    { id: 'tag', help: 'change hashtags and descriptions' },
+    { id: 'delete', help: 'trash, restore and empty the trash' },
+    { id: 'admin', help: 'manage keys and clear the cache' },
+  ];
+  let custom: Scope[] = $state(['read']);
   let hidden = $state('');
   let expiry = $state('0');
   let rate = $state('');
@@ -76,11 +85,15 @@
       formError = 'The rate limit is a whole number of requests per minute.';
       return;
     }
+    if (preset === 'custom' && custom.length === 0) {
+      formError = 'Pick at least one thing the key may do.';
+      return;
+    }
     creating = true;
     try {
       const made = await api.createKey({
         name: name.trim(),
-        preset,
+        ...(preset === 'custom' ? { scopes: allScopes.map((s) => s.id).filter((s) => custom.includes(s)) } : { preset }),
         deny_tags: parseTags(hidden),
         rate_limit: limit,
         expires_in_days: expiry === '0' ? undefined : Number(expiry),
@@ -187,6 +200,20 @@
             <span><strong>{p.label}</strong> <span class="help">{p.help}</span></span>
           </label>
         {/each}
+        <label class="choice">
+          <input type="radio" name="preset" value="custom" bind:group={preset} />
+          <span><strong>Custom</strong> <span class="help">Choose exactly what the key may do.</span></span>
+        </label>
+        {#if preset === 'custom'}
+          <div class="scopes" data-testid="custom-scopes">
+            {#each allScopes as s (s.id)}
+              <label class="choice">
+                <input type="checkbox" value={s.id} bind:group={custom} />
+                <span><strong>{s.id}</strong> <span class="help">{s.help}</span></span>
+              </label>
+            {/each}
+          </div>
+        {/if}
       </fieldset>
       <label>
         Hidden hashtags <span class="help">(optional)</span>
@@ -382,6 +409,13 @@
   }
   .choice input {
     margin-top: 4px;
+  }
+  .scopes {
+    display: grid;
+    gap: 6px;
+    margin: 4px 0 0 26px;
+    padding-left: 12px;
+    border-left: 1px solid var(--border-strong);
   }
   .help {
     font-size: 12px;

@@ -241,7 +241,8 @@ export const api = {
 
   listKeys: (includeRevoked: boolean) =>
     request<{ items: ApiKey[] }>('GET', `/keys${qs({ include_revoked: includeRevoked })}`),
-  createKey: (b: { name: string; preset: KeyPreset; deny_tags?: string[]; rate_limit?: number | null; expires_in_days?: number }) =>
+  /** Either a preset or an explicit list of scopes ("Custom"). */
+  createKey: (b: { name: string; preset?: KeyPreset; scopes?: Scope[]; deny_tags?: string[]; rate_limit?: number | null; expires_in_days?: number }) =>
     request<ApiKey & { key: string }>('POST', '/keys', { body: b }),
   updateKey: (id: string, b: { name?: string; preset?: KeyPreset; deny_tags?: string[]; rate_limit?: number | null }) =>
     request<ApiKey>('PATCH', `/keys/${id}`, { body: b }),

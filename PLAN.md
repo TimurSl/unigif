@@ -137,10 +137,10 @@ unigif/
 │  ├─ api/               # router, handlers, extractors, problem+json errors
 │  └─ web.rs             # embedded web/dist, SPA fallback
 ├─ migrations/           # SQL migrations, embedded with sqlx::migrate!
-├─ tests/                # integration tests (API, media pipeline)
+├─ tests/                # integration tests (API, media pipeline); fixtures are made by ffmpeg
+│  └─ scale/seed.sql     # 50 000-row fixture for the on-demand scale test
 ├─ api/openapi.yaml      # written first; source of truth for the API
 ├─ web/                  # Svelte 5 + Vite + TypeScript
-├─ testdata/             # fixture GIFs and MP4s
 └─ docs/
 ```
 
@@ -478,6 +478,8 @@ A social network that needs real GIFs just uses `media.gif.url`; the file is gen
 | `DELETE /gifs/{id}` | `delete` | Move to trash (purged after 30 days) |
 | `POST /gifs/{id}/restore` | `delete` | Take out of trash |
 | `POST /gifs/{id}/use` | `read` | Usage ping when a GIF is sent; feeds `sort=used` |
+| `POST /gifs/{id}/convert` | `read` | `{ "variants": [...] }`: start on-demand conversions now ("convert now"); returns `202` at once (added in M8) |
+| `POST /gifs/trash/empty` | `delete` | Purge every trashed GIF the caller can see, files included (added in M8) |
 | `GET /gifs/unsorted/next?after={id}` | `read` | Next unsorted item plus the remaining count |
 | `POST /gifs/batch` | `tag` / `delete` | Apply tag changes or trash to many IDs |
 | `GET /tags` | `read` | `q` (prefix), `sort=recent\|popular\|alpha`, `limit` |
@@ -487,7 +489,8 @@ A social network that needs real GIFs just uses `media.gif.url`; the file is gen
 | `DELETE /tags/{name}` | `tag` | Remove the tag from every GIF |
 | `GET /keys`, `POST /keys`, `PATCH /keys/{id}`, `DELETE /keys/{id}` | `admin` | Key management |
 | `GET /stats` | `read` | Counts, bytes stored and saved, unsorted count |
-| `GET /events` | `read` | Server-sent events: `gif.added`, `gif.ready`, `gif.tagged`, `gif.deleted` |
+| `DELETE /cache` | `admin` | Clear the conversion cache (added in M8) |
+| `GET /events` | `read` | Server-sent events: `gif.added`, `gif.ready`, `gif.failed`, `gif.tagged`, `gif.deleted` |
 | `GET /healthz`, `GET /readyz` | none | For the reverse proxy and monitoring |
 
 ### 8.4 Quick add
@@ -741,11 +744,11 @@ New key
 | `nixosModules.default` | `services.unigif` |
 | `overlays.default` | Adds `pkgs.unigif` |
 | `devShells.<system>.default` | Rust toolchain (cargo, rustc, clippy, rustfmt, rust-analyzer), `sqlx-cli`, `cargo-nextest`, Node, ffmpeg, sqlite, Playwright browsers |
-| `checks.<system>.*` | `cargo test`, `clippy`, `rustfmt`, web tests, and the NixOS VM test |
+| `checks.<system>.*` | `package` (the build runs `cargo test`), `fmt` (rustfmt), `clippy`, `web` (`svelte-check` and the 150 kB JavaScript budget), and `vm` (the NixOS VM test). The Playwright suite needs a browser and stays in CI |
 | `formatter.<system>` | `nixfmt` |
 | `apps.<system>.default` | `nix run` starts a local instance with a temporary data directory |
 
-Systems: `x86_64-linux` and `aarch64-linux`.
+Systems: `x86_64-linux` and `aarch64-linux`. CI builds the aarch64 package natively on GitHub's `ubuntu-24.04-arm` runner.
 
 Build notes:
 
@@ -892,7 +895,7 @@ Sizes are relative (S / M / L), not time estimates.
 | M5 ✅ | **Conversion**: on-demand GIF / WebM / WebP, cache with eviction, share page with OpenGraph, storage stats | M | `full.gif` is generated once and served from cache after; the cache stays under its limit |
 | M6 ✅ | **NixOS**: module, hardening, nginx integration, backup timer, VM test, deployment guide | M | The VM test in 10.4 passes; the service runs on the VPS |
 | M7 ✅ | **Polish**: hashtag management (rename, merge), trash, batch select, co-occurrence suggestions, live updates over SSE, API key screen refinements | M | Renaming or merging a hashtag updates every GIF; a GIF added through the API appears in an open Unsorted tab without a reload |
-| M8 | **Completion**: the parts of sections 4 to 12 that M0 to M7 left out: `export` and `gc`, Empty trash, Clear cache, the Account screen, private media mode, original-size and description in the UI, usage pings, the scale test (full list in 13.2) | M | Every row of 13.2 is done or struck from the plan with a reason; section 9.6 matches the app screen for screen |
+| M8 ✅ | **Completion**: the parts of sections 4 to 12 that M0 to M7 left out: `export` and `gc`, Empty trash, Clear cache, the Account screen, private media mode, original-size and description in the UI, usage pings, the scale test (full list in 13.2) | M | Every row of 13.2 is done or struck from the plan with a reason; section 9.6 matches the app screen for screen |
 
 ### 13.1 Implementation notes (M0 to M7)
 
@@ -909,8 +912,8 @@ Built in this order, and verified by `cargo test` (46 unit tests and 68 integrat
 - **Forced demuxers.** For GIF, MP4/MOV and Matroska/WebM the sniffed type picks ffmpeg's demuxer with `-f`, so a crafted file cannot select an exotic one (playlists, concat scripts).
 - **Alpha detection** looks at the alpha plane (`alphaextract` + `signalstats`), because ffmpeg decodes every GIF as `bgra` whether or not it has transparency.
 - **Sources of unfinished jobs** live in `work/`, not `tmp/` (which is wiped at start), so a restart resumes them. A failed item is dropped and replaced when the same bytes are uploaded again.
-- **Animated WebP input** depends on the ffmpeg build: ffmpeg 6.x decodes only the first frame, newer releases decode the animation. `doctor` does not check this yet.
-- Deferred to later milestones: pre-migration DB snapshots (M6), the "keep the smaller of re-encode and original" rule for video sources (M7 polish), `export`, `gc`, `user` and `key` subcommands.
+- **Animated WebP input** depends on the ffmpeg build: ffmpeg 6.x decodes only the first frame, newer releases decode the animation. `doctor` checks this since M8.
+- Deferred to later milestones: pre-migration DB snapshots (M6), the "keep the smaller of re-encode and original" rule for video sources, `export` and `gc` (all three done in M8), `user` and `key` subcommands.
 
 **M2, auth and API: done**, with these departures from the text above:
 
@@ -959,7 +962,7 @@ Built in this order, and verified by `cargo test` (46 unit tests and 68 integrat
 - **Share page** (`/g/{id}`, public like media, `Cache-Control: max-age=60`, `X-Robots-Tag: noindex`). Open Graph and Twitter tags (`og:video` with type and size, `og:image` = the poster, `twitter:card = summary_large_image`) over a plain dark page with an autoplaying muted video and links to the four formats. URLs in the tags are absolute: from `publicUrl`, else from the request's `Host` and `X-Forwarded-Proto` (escaped). It deliberately shows **no hashtags and no description**: those are the owner's organisation, and the page is reachable by anyone who has the link. `/g/{id}.mp4|gif|webm|webp` answer `307` to the media file; a trashed or unknown id is `404`.
 - **API.** The GIF object gains `page_url` and `media.gif`, `preview_gif`, `webm`, `webp` (`{url, on_demand: true}`; they carry no size or byte count because nothing exists yet). `/stats` gains `cache_files`, `cache_bytes` and `cache_limit`, filtered by the key's hidden hashtags like everything else. Settings shows "Converted copies" next to Stored and Saved; the detail view's Copy row is Link (the share page), MP4, GIF, WebM and WebP.
 - **Tests.** `tests/convert.rs` (15): every format is the right codec and size and is converted exactly once; Range / ETag on a converted file; six concurrent requests get one identical file and one cache row; a zero-second budget gives a `500`, leaves no files and does not wedge the in-flight map; transparency survives in GIF (checked by decoding) and WebP (checked in the container); eviction order (A is evicted first, then C after B is used again) and the byte limit; the janitor trim; a wiped cache directory; purge and trash; the share page tags, escaping and redirects. One more Playwright test copies each format's link and fetches it without credentials.
-- **Known limits.** ffmpeg 6.x cannot decode an animated WebP (see M1), so the WebP tests read the RIFF container (animation flag, alpha flag, canvas size, frame count) instead of decoding it. Not done: a per-GIF "convert now" warm-up, and `Cache-Control` for converted files stays `immutable` although a file rebuilt after eviction could differ by a few bytes (the `ETag` includes the length, so a changed file is a different validator).
+- **Known limits.** ffmpeg 6.x cannot decode an animated WebP (see M1), so the WebP tests read the RIFF container (animation flag, alpha flag, canvas size, frame count) instead of decoding it. The per-GIF "convert now" warm-up came in M8. `Cache-Control` for converted files stays `immutable` although a file rebuilt after eviction could differ by a few bytes (the `ETag` includes the length, so a changed file is a different validator).
 
 **M6, NixOS: done**, with these departures from the text above:
 
@@ -993,7 +996,7 @@ Built in this order, and verified by `cargo test` (46 unit tests and 68 integrat
 
 M0 to M6 are the "storage accessor" you asked for first; M7 is the polish on top.
 
-### 13.2 M8: what is left (not started)
+### 13.2 M8: what was left after M7 (all done; notes in 13.3)
 
 Everything sections 1 to 12 promise that the code does not do yet, found by checking the plan against the tree after M7 (routes in `src/api/mod.rs`, subcommands in `src/main.rs`, the Svelte components, the tests and the flake). Nothing here is new scope, except the three endpoints marked **(new)**, which the 8.3 table lacks and the promised screens need. They only add to v1.
 
@@ -1050,6 +1053,36 @@ Everything sections 1 to 12 promise that the code does not do yet, found by chec
 **Out of M8**: near-duplicate detection (the dHash is stored but nothing reads it; section 5 marks it "for later"), passkeys / TOTP / OIDC (7.1 "later, optional"), AI auto-tagging, and everything in "Later, not scheduled" below.
 
 **Later, not scheduled**: Telegram integration (section 11), a Tenor/Klipy-shaped adapter, and wiring Unigif into the social network as its GIF provider.
+
+### 13.3 Implementation notes (M8)
+
+Every row of 13.2 is done. Verified by `cargo test` (the counts are in the last bullet), `cargo clippy -D warnings`, `svelte-check`, the Playwright suite, the on-demand scale tests, and the new flake checks. Departures and details:
+
+- **A1 export.** `unigif export <file.zip>` writes one file per GIF (the kept original, else `full.mp4`) under `media/` and a `manifest.json` (`format: "unigif-export"`, `version: 1`) with hashtags, description, source (type, id, URL), `created_at`, `use_count` and `last_used_at`. Entries are stored, not deflated (the media is already compressed); ZIP64 is used per entry when needed, and the archive is written as `.zip.part` and renamed. Trashed GIFs and GIFs that never became ready are left out. The re-import is `unigif import <file.zip>` (the existing `import` takes a folder or such an archive): each entry goes through the ordinary quick add, so it is deduplicated and processed like any upload, and the dates and usage are restored afterwards. `tests/export.rs` round-trips into an empty instance (hashtags, description, dates, "most used" order, a transparent original byte for byte, Unsorted stays unsorted, nothing from the trash), checks that a second import finds only duplicates, and that a zip without a manifest is refused.
+- **A2 gc.** `unigif gc` runs one janitor pass (trash past retention, expired sessions, the cache trimmed to its limit) and prints what it did. The janitor's eviction now also reports bytes.
+- **A3 Empty trash.** `POST /gifs/trash/empty` (`delete`, hidden hashtags honoured, so a key can only purge what it can see), answering `{ "purged": n }`. The purge was reworked for both the janitor and this endpoint: under the write lock it checks the GIF is still in the trash, deletes the files (media, cache, any leftover source), then the rows. A restore that races a purge therefore wins, and a crash before the commit leaves a trashed row that is purged next time. The web UI asks "Delete N GIFs forever?" with Cancel and Delete forever.
+- **A4 Clear cache.** `DELETE /cache` (`admin`) deletes cached files, skipping `.part` files and conversions in progress (the in-flight map); a file being streamed keeps streaming because its handle outlives the unlink. Rows whose files are gone are dropped too. Answers `{ "files", "bytes" }`.
+- **A5 Private media.** `media.public` (default `true`). With `false`, `/m/*` and `/g/*` (page and redirects) need a session cookie or a key with `read`; a GIF hidden from the key is a `404`; responses are `Cache-Control: private, …`. No rate limit or CSRF rule applies to these GETs. The web UI needs no change (its `<video>` sends the cookie).
+- **A6 Smaller of re-encode and copy.** An H.264 / yuv420p source with even dimensions inside the long-edge cap that is re-encoded anyway (it has audio, or its frame rate is above `media.maxFps`) is also packet-copied (audio dropped), and the smaller `full.mp4` is kept. The long edge stays a hard cap, because clients rely on it; that is how "apart from the size target" was read. Tests: a tightly compressed source keeps its own packets, a lossless one is re-encoded.
+- **A7.** The GIF object has `bytes_original` and `original_kept`.
+- **A8.** `gif.failed` is emitted when a job gives up; `lib/live.ts` treats it like any change (the tile shows "Could not be processed").
+- **A9 Convert now.** `POST /gifs/{id}/convert` with `{ "variants": ["gif", "preview_gif", "webm", "webp"] }` (`{}` for all four) starts detached conversions through the same in-flight map and answers `202` with the file names. The detail view's GIF / WebM / WebP copy buttons call it, so a pasted link is warm by the time someone opens it.
+- **A10.** `doctor` decodes an embedded 144-byte, two-frame lossless animated WebP and reports a warning (not a failure) when fewer than two frames come back. Checked against ffmpeg 6.1 (warns: it decodes none) and 9.0 (ok).
+- **B1 and B2.** Settings → Account: a change-password form (current, new, repeat; the hidden username field lets password managers file it) and the list of signed-in devices (browser and OS from the User-Agent, address, last seen, "This device") with Revoke. A wrong current password is a `401 invalid_credentials`, which the client no longer mistakes for a lost session.
+- **B3 to B6.** Empty trash and Clear cache buttons; the detail view shows "183 kB stored · 2.1 MB original" and an editable description (saved on blur or Enter, Escape undoes) that becomes the tile's accessible name ("A cat falls off a desk, tagged #cat").
+- **B7.** Copy and Share send the usage ping. The Library has Newest / Most used / Oldest, remembered in the owner's prefs (`library_sort`).
+- **B8.** Reduced motion on a touch screen: the first tap plays the tile, the second opens it. Compatibility mouse events from a tap no longer count as hover.
+- **B9.** A GIF that newly belongs in an open list (Library with hashtag chips, or Unsorted) is put at its place by `created_at` when that place is among the loaded items, or at the end of a fully loaded list; otherwise a "New results · reload" button appears. Under Most used the GIF object carries no use count, so it is always the button. While a half-typed word is in the box the list cannot tell, and leaves the GIF to the next search.
+- **B10.** Search has a Select mode: tick results (Shift for a range), then "Save N" saves six at a time with the hashtags in the box and reports "N saved, M already in your library, K failed"; failures stay ticked.
+- **B11.** Rubber-band selection with a mouse (never touch): in select mode it starts anywhere, otherwise on the empty space between tiles, which turns select mode on. It adds to what was ticked, auto-scrolls near the edges, and the click at the end of the drag is swallowed.
+- **Also in 9.6, missed by 13.2.** The key form had no **Custom** access; it now offers checkboxes for each scope, admin included.
+- **C1 Scale.** `tests/scale/seed.sql` makes 50 000 ready GIFs (rows and stored-variant rows, no files), 200 hashtags, a tenth unsorted. `cargo test --release --test scale -- --ignored` times 16 list, search, hashtag and stats requests (four through a key with a hidden hashtag), 60 runs each, against 50 ms at p95; `E2E_SCALE=1 npm run e2e -- --project scale` scrolls the grid for eight seconds (about 115 000 px, at most 32 tiles in the DOM, p95 frame 17 to 33 ms headless). The first run failed and led to these fixes: hashtag lists and the hashtag count read the maintained `tags.gif_count` instead of re-counting `gif_tags` over the library, and for a key with hidden hashtags subtract the hidden GIFs' counts; the hidden-hashtag clause became a non-correlated `NOT IN`, so SQLite builds the hidden set once per query; a prefix search uses `EXISTS` (walk the library in order, stop at the limit) when the prefix covers more than 1 000 GIFs and `IN` otherwise; migration 0003 adds partial indexes for the trash, "most used" and cache rows. Before and after at p95: stats 410 ms → 18 ms, hashtag list 138 → 2 ms, prefix 87 → 9 ms, stats through a hiding key 670 → 41 ms; every case is now under 50 ms.
+- **C2.** `nix flake check` gained `fmt`, `clippy` (reusing the package's vendored crates) and `web` (`svelte-check` plus the budget, on the package's npm build). Playwright stays in CI, since it needs a browser.
+- **C3.** A CI job builds `packages.aarch64-linux.unigif` (tests included) natively on GitHub's arm runner. It had not run yet when M8 was written up; this environment cannot build for aarch64.
+- **C4.** `docs/ios-shortcut.md`: an Uploader key and a Shortcut that posts files raw and links as `{ "url": … }`, with optional hashtags and what each error means. Not yet tried on a device (an owner's step).
+- **C5.** `testdata/` is dropped from 4.1: every hard case can be made in the tests. A truncated file is cut in code, and variable frame delays come from ffmpeg (`settb` and `setpts` with `-fps_mode vfr`). A new test checks such a GIF keeps its total duration and uneven frame timing in `full.mp4`.
+- **C6.** README and `openapi.yaml` cover everything above; the contract tests exercise the three new operations.
+- **Tests.** `cargo test`: 51 unit and 89 integration tests (12 new in M8), plus the ignored scale test. Playwright: 30 tests in four projects (9 new), plus the 2-test `scale` project on demand. `svelte-check` is clean; the initial JavaScript is about 54 kB gzipped against the 150 kB budget.
 
 ### Testing
 

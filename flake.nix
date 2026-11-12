@@ -67,11 +67,46 @@
 
       formatter = forAllSystems (pkgs: pkgs.nixfmt);
 
-      checks = forAllSystems (pkgs: {
-        # Building the package runs the whole cargo test suite (real ffmpeg).
-        package = self.packages.${pkgs.stdenv.hostPlatform.system}.unigif;
-        # Boots a NixOS VM with the module and nginx and drives the real service.
-        vm = import ./nix/vm-test.nix { inherit self pkgs; };
-      });
+      checks = forAllSystems (
+        pkgs:
+        let
+          unigif = self.packages.${pkgs.stdenv.hostPlatform.system}.unigif;
+        in
+        {
+          # Building the package runs the whole cargo test suite (real ffmpeg).
+          package = unigif;
+          # Boots a NixOS VM with the module and nginx and drives the real service.
+          vm = import ./nix/vm-test.nix { inherit self pkgs; };
+          # The same gates as CI: rustfmt, clippy, svelte-check and the JS budget.
+          fmt = pkgs.runCommand "unigif-fmt" { nativeBuildInputs = [ pkgs.cargo pkgs.rustfmt ]; } ''
+            cd ${unigif.src}
+            cargo fmt --check
+            touch $out
+          '';
+          clippy = unigif.overrideAttrs (old: {
+            pname = "unigif-clippy";
+            nativeBuildInputs = old.nativeBuildInputs ++ [ pkgs.clippy ];
+            buildPhase = ''
+              runHook preBuild
+              cargo clippy --all-targets --offline -- -D warnings
+              runHook postBuild
+            '';
+            doCheck = false;
+            installPhase = "touch $out";
+            dontFixup = true;
+          });
+          web = unigif.web.overrideAttrs {
+            pname = "unigif-web-check";
+            postBuild = ''
+              npm run check
+              total=0
+              for f in dist/assets/*.js; do total=$((total + $(gzip -9 -c "$f" | wc -c))); done
+              echo "initial JavaScript, gzipped: $total bytes (budget 150000)"
+              test "$total" -le 150000
+            '';
+            installPhase = "touch $out";
+          };
+        }
+      );
     };
 }

@@ -414,3 +414,20 @@ test('drag a rubber band over tiles to select them', async ({ page }) => {
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('selected-count')).toHaveCount(0);
 });
+
+test('API keys: Custom access picks exact scopes', async ({ page }) => {
+  await login(page);
+  await page.goto('/keys');
+  await page.getByLabel('Name', { exact: true }).fill('Tagger');
+  await page.getByRole('radio', { name: /Custom/ }).check();
+  const scopes = page.getByTestId('custom-scopes');
+  await scopes.getByRole('checkbox', { name: /^read/ }).uncheck();
+  await page.getByRole('button', { name: 'Create key' }).click();
+  await expect(page.getByRole('alert')).toHaveText('Pick at least one thing the key may do.');
+  await scopes.getByRole('checkbox', { name: /^read/ }).check();
+  await scopes.getByRole('checkbox', { name: /^tag/ }).check();
+  await page.getByRole('button', { name: 'Create key' }).click();
+  await expect(page.getByTestId('new-key-value')).toBeVisible();
+  const keys = (await (await page.request.get('/api/v1/keys')).json()).items as { name: string; scopes: string[] }[];
+  expect(keys.find((k) => k.name === 'Tagger')?.scopes).toEqual(['read', 'tag']);
+});
