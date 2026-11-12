@@ -87,3 +87,12 @@ jobs:
       # Builds the package (which runs the cargo test suite) and every check.
       - run: nix flake check --print-build-logs
       - run: nix build --print-build-logs
+
+  nix-aarch64:
+    # The package on aarch64-linux (plan 10.1), built natively on GitHub's arm runner; this builds
+    # the web UI and runs the cargo test suite with real ffmpeg, as on x86_64.
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v30
+      - run: nix build .#packages.aarch64-linux.unigif --print-build-logs

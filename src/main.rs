@@ -11,7 +11,7 @@ use unigif::auth::{accounts, Scopes};
 use unigif::config::Config;
 use unigif::db::{keys as key_db, now_ms, users};
 use unigif::ingest::worker;
-use unigif::{api, backup, db, doctor, import, janitor, tags};
+use unigif::{api, backup, db, doctor, export, import, janitor, tags};
 
 #[derive(Parser)]
 #[command(name = "unigif", version, about = "Self-hosted, hashtag-first GIF library")]
@@ -44,8 +44,18 @@ enum Command {
         #[arg(long, default_value_t = 7)]
         keep: usize,
     },
-    /// Bulk-import a folder of GIFs and videos.
+    /// Write every GIF (media plus hashtags, descriptions and sources) into a
+    /// zip that `unigif import` can restore. Safe while the server runs.
+    Export {
+        /// Where to write the archive.
+        file: PathBuf,
+    },
+    /// Run the janitor once now: purge expired trash, end expired sessions,
+    /// trim the conversion cache to its limit.
+    Gc,
+    /// Bulk-import a folder of GIFs and videos, or an archive made by `export`.
     Import {
+        /// A folder, or a .zip written by `unigif export`.
         dir: PathBuf,
         /// Turn the folder names above each file into hashtags.
         #[arg(long)]
@@ -210,6 +220,32 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             let dir = dir.unwrap_or_else(|| backup::default_dir(&cfg.data_dir));
             let dest = backup::run(&db, &dir, keep).await?;
             println!("{}", dest.display());
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Export { file } => {
+            if !cfg.db_path().exists() {
+                anyhow::bail!("there is no database at {}", cfg.db_path().display());
+            }
+            let app = start(cfg, false).await?;
+            let s = export::export(&app, &file).await?;
+            println!(
+                "exported {} GIFs ({}) to {}",
+                s.gifs,
+                unigif::config::ByteSize(s.bytes),
+                file.display()
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Gc => {
+            let app = start(cfg, false).await?;
+            let r = janitor::run_once(&app).await?;
+            println!(
+                "purged {} GIFs from the trash, ended {} expired sessions, evicted {} cached files ({})",
+                r.purged_gifs,
+                r.expired_sessions,
+                r.evicted_files,
+                unigif::config::ByteSize(r.evicted_bytes)
+            );
             Ok(ExitCode::SUCCESS)
         }
         Command::Import { dir, tags_from_folders } => {

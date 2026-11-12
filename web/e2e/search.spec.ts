@@ -75,3 +75,32 @@ test('add an API key in Settings, search, and save a result to the library', asy
   await page.getByRole('button', { name: 'Add: cat one' }).click({ force: true });
   await expect(page.getByText('Already in your library')).toBeVisible();
 });
+
+test('select several results and save them together, with hashtags for the batch', async ({ page }) => {
+  await login(page);
+  await page.goto('/search?provider=giphy&q=dog');
+  await expect(page.getByRole('button', { name: 'Add: dog one' })).toBeVisible();
+  // "dog one" and "dog two" are the same files as before; make them new by trashing and purging the library.
+  for (const g of (await (await page.request.get('/api/v1/gifs?limit=100')).json()).items as { id: string }[]) {
+    await page.request.delete(`/api/v1/gifs/${g.id}`, { headers: { 'X-Unigif-Request': '1' } });
+  }
+  expect((await page.request.post('/api/v1/gifs/trash/empty', { headers: { 'X-Unigif-Request': '1' } })).ok()).toBeTruthy();
+
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  await page.getByRole('button', { name: 'Select: dog one' }).click({ force: true });
+  await page.getByRole('button', { name: 'Select: dog two' }).click({ force: true, modifiers: ['Shift'] });
+  await expect(page.getByTestId('selected-count')).toHaveText('2 selected');
+  await page.getByLabel('Hashtags for added GIFs').fill('dog pack');
+  await page.getByRole('button', { name: 'Save 2' }).click();
+  await expect(page.getByText('2 saved')).toBeVisible();
+  await expect(page.getByTestId('selected-count')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Added: dog one' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Added: dog two' })).toBeVisible();
+
+  await expect
+    .poll(async () => {
+      const body = await (await page.request.get('/api/v1/gifs?sort=old')).json();
+      return body.items.map((g: { tags: string[] }) => [...g.tags].sort().join(',')).sort();
+    })
+    .toEqual(['dog,pack', 'dog,pack']);
+});

@@ -23,6 +23,10 @@ export interface Gif {
   height: number | null;
   duration_ms: number | null;
   has_alpha: boolean;
+  /** Size of the file as it was added. */
+  bytes_original: number;
+  /** Whether that file is kept next to the MP4. */
+  original_kept: boolean;
   thumbhash: string | null;
   source: { type: string; id: string | null };
   created_at: string;
@@ -54,6 +58,17 @@ export interface Me {
   scopes: Scope[];
   deny_tags: string[];
   prefs?: Record<string, unknown>;
+}
+
+export interface Session {
+  id: string;
+  user_agent: string | null;
+  ip: string | null;
+  created_at: string;
+  last_seen_at: string;
+  expires_at: string;
+  /** The session making this request. */
+  current: boolean;
 }
 
 export interface Stats {
@@ -148,7 +163,8 @@ async function request<T>(method: string, path: string, init: { body?: unknown; 
     } catch {
       /* not a problem document */
     }
-    if (res.status === 401 && path !== '/auth/login') onUnauthorized();
+    // A wrong password (at login, or as the current one when changing it) is a 401 too, but not a lost session.
+    if (res.status === 401 && code !== 'invalid_credentials') onUnauthorized();
     throw new ApiError(res.status, code, detail);
   }
   if (res.status === 204) return undefined as T;
@@ -178,6 +194,11 @@ export const api = {
   login: (username: string, password: string) =>
     request<{ user: { id: number; username: string } }>('POST', '/auth/login', { body: { username, password } }),
   logout: () => request<void>('POST', '/auth/logout'),
+  /** Every other session is signed out; this one stays. */
+  changePassword: (current: string, next: string) =>
+    request<void>('POST', '/auth/password', { body: { current, new: next } }),
+  listSessions: () => request<{ items: Session[] }>('GET', '/auth/sessions'),
+  revokeSession: (id: string) => request<void>('DELETE', `/auth/sessions/${encodeURIComponent(id)}`),
   me: () => request<Me>('GET', '/me'),
   setPrefs: (prefs: Record<string, unknown>) => request<Me>('PATCH', '/me', { body: { prefs } }),
   stats: () => request<Stats>('GET', '/stats'),
@@ -187,8 +208,20 @@ export const api = {
   unsortedNext: (after: string | undefined, sort: 'new' | 'old') =>
     request<{ item: Gif | null; remaining: number; total: number }>('GET', `/gifs/unsorted/next${qs({ after, sort })}`),
   setTags: (id: string, tags: string[]) => request<Gif>('PATCH', `/gifs/${id}`, { body: { tags } }),
+  /** An empty string clears it. */
+  setDescription: (id: string, description: string) =>
+    request<Gif>('PATCH', `/gifs/${id}`, { body: { description: description || null } }),
   trash: (id: string) => request<void>('DELETE', `/gifs/${id}`),
   restore: (id: string) => request<Gif>('POST', `/gifs/${id}/restore`),
+  /** A GIF was sent somewhere: feeds the "Most used" order. */
+  useGif: (id: string) => request<void>('POST', `/gifs/${id}/use`),
+  /** Start converting these formats now, so the link works at once for whoever opens it. */
+  convert: (id: string, variants: ('gif' | 'preview_gif' | 'webm' | 'webp')[]) =>
+    request<{ started: string[] }>('POST', `/gifs/${id}/convert`, { body: { variants } }),
+  /** Purge everything in the trash now. Cannot be undone. */
+  emptyTrash: () => request<{ purged: number }>('POST', '/gifs/trash/empty'),
+  /** Drop every cached GIF/WebM/WebP conversion (admin). */
+  clearCache: () => request<{ files: number; bytes: number }>('DELETE', '/cache'),
   /** All or nothing, at most 500 ids. */
   batch: (ids: string[], change: { add?: string[]; remove?: string[]; trash?: boolean }) =>
     request<{ updated: number; not_found: string[] }>('POST', '/gifs/batch', { body: { ids, ...change } }),
@@ -208,7 +241,8 @@ export const api = {
 
   listKeys: (includeRevoked: boolean) =>
     request<{ items: ApiKey[] }>('GET', `/keys${qs({ include_revoked: includeRevoked })}`),
-  createKey: (b: { name: string; preset: KeyPreset; deny_tags?: string[]; rate_limit?: number | null; expires_in_days?: number }) =>
+  /** Either a preset or an explicit list of scopes ("Custom"). */
+  createKey: (b: { name: string; preset?: KeyPreset; scopes?: Scope[]; deny_tags?: string[]; rate_limit?: number | null; expires_in_days?: number }) =>
     request<ApiKey & { key: string }>('POST', '/keys', { body: b }),
   updateKey: (id: string, b: { name?: string; preset?: KeyPreset; deny_tags?: string[]; rate_limit?: number | null }) =>
     request<ApiKey>('PATCH', `/keys/${id}`, { body: b }),

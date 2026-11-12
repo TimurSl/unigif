@@ -12,6 +12,8 @@
     empty,
     selecting = false,
     selected,
+    onband,
+    onbandend,
   }: {
     items: Gif[];
     loading: boolean;
@@ -24,6 +26,12 @@
     /** Long-press on a tile (touch only). */
     onmenu?: (g: Gif) => void;
     empty?: import('svelte').Snippet;
+    /**
+     * Rubber-band selection with a mouse: called while dragging with the ids the band covers. Starts
+     * anywhere in select mode, or on empty space between tiles otherwise. Touch never starts one.
+     */
+    onband?: (ids: string[]) => void;
+    onbandend?: () => void;
   } = $props();
 
   const GAP = 12;
@@ -83,6 +91,69 @@
     return new Set(onScreen.slice(0, PHONE_MAX_PLAYING));
   });
 
+  // ---- Rubber band -------------------------------------------------------------------------------
+  const DRAG_SLOP = 6;
+  let canvas: HTMLDivElement | undefined = $state();
+  let press: { x: number; y: number; id: number } | null = null;
+  let band = $state<{ x: number; y: number; w: number; h: number } | null>(null);
+  let lastPointer = { x: 0, y: 0 };
+  let suppressClick = false;
+
+  /** A point in canvas coordinates (they scroll with the content). */
+  function toCanvas(clientX: number, clientY: number) {
+    const r = canvas!.getBoundingClientRect();
+    return { x: clientX - r.left, y: clientY - r.top };
+  }
+
+  function bandDown(e: PointerEvent) {
+    if (!onband || !canvas || e.pointerType !== 'mouse' || e.button !== 0) return;
+    const onTile = (e.target as HTMLElement).closest('.slot') !== null;
+    if (!selecting && onTile) return;
+    press = { ...toCanvas(e.clientX, e.clientY), id: e.pointerId };
+    lastPointer = { x: e.clientX, y: e.clientY };
+  }
+
+  function updateBand() {
+    if (!press || !canvas) return;
+    const p = toCanvas(lastPointer.x, lastPointer.y);
+    const x = Math.min(press.x, p.x);
+    const y = Math.min(press.y, p.y);
+    const w = Math.abs(p.x - press.x);
+    const h = Math.abs(p.y - press.y);
+    if (!band && Math.hypot(w, h) < DRAG_SLOP) return;
+    if (!band) canvas.setPointerCapture?.(press.id);
+    band = { x, y, w, h };
+    const ids: string[] = [];
+    layout.boxes.forEach((b, i) => {
+      if (b.x < x + w && b.x + colW > x && b.y < y + h && b.y + b.h > y) ids.push(items[i].id);
+    });
+    onband?.(ids);
+  }
+
+  function bandMove(e: PointerEvent) {
+    if (!press || e.pointerId !== press.id) return;
+    lastPointer = { x: e.clientX, y: e.clientY };
+    updateBand();
+    // Near the top or bottom edge the list scrolls, so a band can reach past the screen.
+    if (band && scroller) {
+      const r = scroller.getBoundingClientRect();
+      if (e.clientY > r.bottom - 40) scroller.scrollBy(0, 24);
+      else if (e.clientY < r.top + 40) scroller.scrollBy(0, -24);
+    }
+  }
+
+  function bandUp(e: PointerEvent) {
+    if (!press || e.pointerId !== press.id) return;
+    if (band) {
+      // The click that follows the drag must not toggle or open the tile under the pointer.
+      suppressClick = true;
+      setTimeout(() => (suppressClick = false), 0);
+      onbandend?.();
+    }
+    press = null;
+    band = null;
+  }
+
   function maybeMore() {
     if (!scroller || loading || done) return;
     if (scroller.scrollTop + scroller.clientHeight > layout.total - 1200) onend();
@@ -104,13 +175,31 @@
   onscroll={() => {
     scrollTop = scroller!.scrollTop;
     maybeMore();
+    if (band) updateBand();
+  }}
+  onclickcapture={(e) => {
+    if (suppressClick) {
+      e.stopPropagation();
+      e.preventDefault();
+      suppressClick = false;
+    }
   }}
 >
   <div class="inner" bind:clientWidth={width}>
     {#if items.length === 0 && done && !loading}
       <div class="empty">{@render empty?.()}</div>
     {:else}
-    <div class="canvas" style:height="{layout.total}px">
+    <div
+      class="canvas"
+      class:banding={band !== null}
+      style:height="{layout.total}px"
+      role="presentation"
+      bind:this={canvas}
+      onpointerdown={bandDown}
+      onpointermove={bandMove}
+      onpointerup={bandUp}
+      onpointercancel={bandUp}
+    >
       {#each visible as i (items[i].id)}
         {@const b = layout.boxes[i]}
         <div class="slot" style:transform="translate({b.x}px, {b.y}px)" style:width="{colW}px" style:height="{b.h}px">
@@ -124,6 +213,9 @@
           />
         </div>
       {/each}
+      {#if band}
+        <div class="band" data-testid="rubber-band" style:transform="translate({band.x}px, {band.y}px)" style:width="{band.w}px" style:height="{band.h}px"></div>
+      {/if}
     </div>
     {#if loading}<p class="more">Loading…</p>{/if}
     {/if}
@@ -144,6 +236,18 @@
   }
   .canvas {
     position: relative;
+  }
+  .canvas.banding {
+    user-select: none;
+  }
+  .band {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 5;
+    border: 1px solid var(--accent);
+    background: rgb(255 255 255 / 0.08);
+    pointer-events: none;
   }
   .slot {
     position: absolute;

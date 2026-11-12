@@ -5,6 +5,9 @@ const desktopPort = Number(process.env.E2E_PORT ?? 8799);
 const phonePort = Number(process.env.E2E_PHONE_PORT ?? 8798);
 const searchPort = Number(process.env.E2E_SEARCH_PORT ?? 8797);
 const managePort = Number(process.env.E2E_MANAGE_PORT ?? 8796);
+const scalePort = Number(process.env.E2E_SCALE_PORT ?? 8795);
+// The scale suite seeds 50 000 GIFs; it runs on demand (E2E_SCALE=1 npm run e2e -- --project scale).
+const scale = !!process.env.E2E_SCALE;
 
 const server = (port: number, extra: Record<string, string> = {}) => ({
   command: 'node e2e/serve.mjs',
@@ -51,6 +54,15 @@ export default defineConfig({
       testMatch: /manage\.spec\.ts/,
       use: { baseURL: `http://127.0.0.1:${managePort}` },
     },
+    ...(scale
+      ? [{ name: 'scale', testMatch: /scale\.spec\.ts/, use: { baseURL: `http://127.0.0.1:${scalePort}` } }]
+      : []),
   ],
-  webServer: [server(desktopPort), server(phonePort), server(searchPort, { E2E_PROVIDER: '1' }), server(managePort)],
+  webServer: [
+    server(desktopPort),
+    server(phonePort),
+    server(searchPort, { E2E_PROVIDER: '1' }),
+    server(managePort),
+    ...(scale ? [server(scalePort, { E2E_SEED_SCALE: '1' })] : []),
+  ],
 });

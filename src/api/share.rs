@@ -2,7 +2,8 @@
 //! pasted link unfurls in chats; and `/g/{id}.mp4|gif|webm|webp`, which
 //! redirect to the media file.
 //!
-//! Like media, the page is public to anyone who knows the (unguessable) id.
+//! Like media, the page is public to anyone who knows the (unguessable) id,
+//! unless `media.public = false`, which puts both behind a login or key.
 //! It deliberately shows no hashtags or description: those are the owner's
 //! private organisation, not part of what is being shared.
 
@@ -62,6 +63,7 @@ pub async fn page(
     if row.status != "ready" || row.deleted_at.is_some() {
         return Err(ApiError::NotFound("no such gif"));
     }
+    crate::auth::check_media_access(&app, &headers, &row.id).await?;
 
     if let Some(ext) = ext {
         let variant = REDIRECTS
@@ -136,7 +138,8 @@ a{{color:#a1a1a1}}a:hover{{color:#fafafa}}\
     let h = resp.headers_mut();
     h.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"));
     // Link unfurlers fetch this once; a short cache keeps a trashed GIF from lingering.
-    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=60"));
+    let cache_control = if app.cfg.media.public { "public, max-age=60" } else { "private, max-age=60" };
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache_control));
     h.insert("x-robots-tag", HeaderValue::from_static("noindex"));
     Ok(resp)
 }

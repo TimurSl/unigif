@@ -24,6 +24,47 @@ const REQUIRED_ENCODERS: [(&str, &str); 2] =
 /// Needed only for the on-demand variants; their absence is reported but not fatal.
 const OPTIONAL_ENCODERS: [(&str, &str); 2] = [("gif", "on-demand GIF"), ("libvpx-vp9", "on-demand WebM")];
 
+/// An 8 x 8 lossless animated WebP with two different frames (red, then red
+/// with a blue corner), made once with `ffmpeg -c:v libwebp -lossless 1 -loop 0`.
+/// Embedded so the check works without the encoder.
+const TWO_FRAME_WEBP: [u8; 144] = [
+    0x52, 0x49, 0x46, 0x46, 0x88, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50, 0x56, 0x50, 0x38, 0x58, 0x0a,
+    0x00, 0x00, 0x00, 0x12, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x07, 0x00, 0x00, 0x41, 0x4e, 0x49, 0x4d,
+    0x06, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x41, 0x4e, 0x4d, 0x46, 0x28, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x07, 0x00, 0x00, 0xf4, 0x01, 0x00, 0x00,
+    0x56, 0x50, 0x38, 0x4c, 0x0f, 0x00, 0x00, 0x00, 0x2f, 0x07, 0xc0, 0x01, 0x00, 0x07, 0x10, 0xfd, 0x8f,
+    0xfe, 0x07, 0x22, 0xa2, 0xff, 0x01, 0x00, 0x41, 0x4e, 0x4d, 0x46, 0x2c, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x07, 0x00, 0x00, 0xf4, 0x01, 0x00, 0x00, 0x56, 0x50, 0x38,
+    0x4c, 0x14, 0x00, 0x00, 0x00, 0x2f, 0x07, 0xc0, 0x01, 0x00, 0x0f, 0x10, 0xf3, 0xbf, 0xff, 0xf3, 0x1f,
+    0x0e, 0x0e, 0xff, 0x1f, 0xd1, 0xff, 0x80, 0x07,
+];
+
+/// How many frames this ffmpeg decodes from an animated WebP. ffmpeg 6.x
+/// cannot decode animated WebP at all (it errors or yields at most one frame);
+/// 7.1 and later decode the animation.
+async fn webp_frames(ff: &Ffmpeg, scratch: &std::path::Path) -> Result<u64> {
+    let path = scratch.join(".unigif-doctor.webp");
+    tokio::fs::write(&path, TWO_FRAME_WEBP).await?;
+    let out = ff
+        .run_probe(
+            crate::args![
+                "-count_frames",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=nb_read_frames",
+                "-of",
+                "csv=p=0",
+                &path
+            ],
+            std::time::Duration::from_secs(10),
+        )
+        .await;
+    let _ = tokio::fs::remove_file(&path).await;
+    let text = String::from_utf8_lossy(&out?).trim().to_string();
+    Ok(text.lines().next().and_then(|l| l.trim().parse().ok()).unwrap_or(0))
+}
+
 pub async fn run(cfg: &Config) -> Result<Report> {
     let mut r = Report { lines: vec![] };
     let ff = Ffmpeg::new(&cfg.media);
@@ -68,6 +109,20 @@ pub async fn run(cfg: &Config) -> Result<Report> {
             && tokio::fs::remove_file(&probe).await.is_ok();
         r.push(ok, format!("{} is writable", dir.display()));
     }
+
+    // Not fatal: only animated WebP uploads are affected.
+    let frames = webp_frames(&ff, &cfg.data_dir).await.unwrap_or(0);
+    r.push(
+        true,
+        if frames >= 2 {
+            "animated WebP decoding: ok".to_string()
+        } else {
+            format!(
+                "animated WebP decoding: warning: this ffmpeg decodes {frames} of 2 frames, so animated WebP \
+                 uploads will fail or keep one frame (ffmpeg 7.1 or later decodes them)"
+            )
+        },
+    );
 
     match crate::db::open(&cfg.db_path()).await {
         Ok(db) => {

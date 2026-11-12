@@ -140,6 +140,64 @@ async fn mp4_with_audio_is_stripped_and_large_video_is_downscaled() {
     assert_eq!(video_stream(&p)["height"], 404);
 }
 
+/// An H.264 MP4 that is only re-encoded because of its audio track: a packet
+/// copy is made too, and whichever is smaller is kept.
+async fn add_h264_with_audio(h: &Harness, name: &str, crf: &str) -> (u64, std::path::PathBuf) {
+    let mp4 = h.dir.path().join(name);
+    ffmpeg(&[
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=320x240:rate=15:duration=2",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=duration=2",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-preset",
+        "veryslow",
+        "-crf",
+        crf,
+        "-c:a",
+        "aac",
+        "-shortest",
+        mp4.to_str().unwrap(),
+    ]);
+    let (status, v) = h.add("?wait=60", std::fs::read(&mp4).unwrap()).await;
+    assert_eq!(status, StatusCode::CREATED, "{v}");
+    assert_eq!(v["status"], "ready", "{v}");
+    let full = media_path(h, v["id"].as_str().unwrap(), "full.mp4");
+    let video_bytes = video_stream(&probe(&mp4))["bit_rate"].as_str().unwrap().parse::<u64>().unwrap();
+    (video_bytes, full)
+}
+
+#[tokio::test]
+async fn a_video_keeps_its_own_packets_when_they_are_smaller_than_the_re_encode() {
+    // A tightly compressed source (veryslow, CRF 40) beats the CRF 23 re-encode.
+    let h = Harness::new().await;
+    let (src_rate, full) = add_h264_with_audio(&h, "tight.mp4", "40").await;
+    let p = probe(&full);
+    assert!(p["streams"].as_array().unwrap().iter().all(|s| s["codec_type"] != "audio"), "audio is dropped");
+    let out_rate = video_stream(&p)["bit_rate"].as_str().unwrap().parse::<u64>().unwrap();
+    // Same packets: the bitrate matches the source's video stream (within container rounding).
+    assert!(out_rate.abs_diff(src_rate) * 20 < src_rate, "source {src_rate} b/s, stored {out_rate} b/s");
+    assert!(!full.with_file_name("full.copy.mp4").exists());
+}
+
+#[tokio::test]
+async fn a_video_is_re_encoded_when_that_is_smaller() {
+    // A lossless source (CRF 0) is far larger than the re-encode.
+    let h = Harness::new().await;
+    let (src_rate, full) = add_h264_with_audio(&h, "loose.mp4", "0").await;
+    let out_rate = video_stream(&probe(&full))["bit_rate"].as_str().unwrap().parse::<u64>().unwrap();
+    // Clearly not the same packets (those would match within a few per cent).
+    assert!(out_rate * 20 < src_rate * 19, "source {src_rate} b/s, stored {out_rate} b/s");
+    assert!(!full.with_file_name("full.copy.mp4").exists());
+}
+
 #[tokio::test]
 async fn odd_dimensions_become_even() {
     let h = Harness::new().await;
@@ -357,4 +415,66 @@ async fn jobs_resume_after_a_restart() {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
     panic!("job did not resume after restart");
+}
+
+/// The frame delays of a GIF, in hundredths of a second, from its Graphic
+/// Control Extensions (enough of the format to check a fixture).
+fn gif_delays(d: &[u8]) -> Vec<u16> {
+    let mut out = vec![];
+    let mut i = 0;
+    while i + 7 < d.len() {
+        if d[i] == 0x21 && d[i + 1] == 0xF9 && d[i + 2] == 0x04 {
+            out.push(u16::from_le_bytes([d[i + 4], d[i + 5]]));
+            i += 8;
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+#[tokio::test]
+async fn variable_frame_delays_keep_their_timing() {
+    let h = Harness::new().await;
+    let path = h.dir.path().join("vfr.gif");
+    // Quick frames, then slow ones. The GIF muxer rounds the delays to its own
+    // timebase, so the test reads back what the fixture really holds.
+    ffmpeg(&[
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=96x64:rate=10:duration=1",
+        "-vf",
+        "settb=1/100,setpts='if(lt(N,5),N*0.05,0.25+(N-5)*0.3)/TB'",
+        "-fps_mode",
+        "vfr",
+        path.to_str().unwrap(),
+    ]);
+    let src = std::fs::read(&path).unwrap();
+    let delays = gif_delays(&src);
+    let (lo, hi) = (*delays.iter().min().unwrap(), *delays.iter().max().unwrap());
+    assert!(hi >= lo * 3, "the fixture really has mixed delays: {delays:?}");
+    let expected_ms: i64 = delays.iter().map(|d| *d as i64 * 10).sum();
+
+    let (s, v) = h.add("?wait=30", src).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    assert_eq!(v["status"], "ready", "{v}");
+    // The sum of the delays, not frames × one constant delay.
+    let ms = v["duration_ms"].as_i64().unwrap();
+    assert!(
+        (ms - expected_ms).abs() * 10 <= expected_ms,
+        "duration {ms} ms, delays add up to {expected_ms} ms"
+    );
+
+    // The MP4 keeps the uneven timing: frame timestamps are not evenly spaced.
+    let out = std::process::Command::new("ffprobe")
+        .args(["-v", "error", "-select_streams", "v:0", "-show_entries", "frame=pts_time", "-of", "csv=p=0"])
+        .arg(media_path(&h, v["id"].as_str().unwrap(), "full.mp4"))
+        .output()
+        .unwrap();
+    let pts: Vec<f64> =
+        String::from_utf8_lossy(&out.stdout).lines().filter_map(|l| l.trim().parse().ok()).collect();
+    let gaps: Vec<f64> = pts.windows(2).map(|w| w[1] - w[0]).collect();
+    let (min, max) = gaps.iter().fold((f64::MAX, 0f64), |(lo, hi), g| (lo.min(*g), hi.max(*g)));
+    assert!(max > min * 2.5, "frame gaps should vary like the delays {delays:?}: {gaps:?}");
 }

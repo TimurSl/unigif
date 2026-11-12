@@ -132,15 +132,15 @@ async fn touch(db: &Db, id: &str, variant: Variant, bytes: u64) -> Result<(), sq
 
 /// Delete least recently used files until the cache fits `cache.maxSize`.
 /// `keep` is never removed (the file a request is about to serve). Returns the
-/// number of files evicted.
-pub async fn evict(app: &App, keep: Option<(&str, &str)>) -> Result<usize> {
+/// number of files and bytes evicted.
+pub async fn evict(app: &App, keep: Option<(&str, &str)>) -> Result<(usize, u64)> {
     let max = app.cfg.cache.max_size.0 as i64;
     let recorded: i64 =
         sqlx::query_scalar("SELECT COALESCE(SUM(bytes), 0) FROM variants WHERE tier = 'cache'")
             .fetch_one(&app.db)
             .await?;
     if recorded <= max {
-        return Ok(0);
+        return Ok((0, 0));
     }
     // One eviction at a time, so two runs cannot both free the same bytes.
     let _guard = app.evicting.lock().await;
@@ -180,7 +180,7 @@ pub async fn evict(app: &App, keep: Option<(&str, &str)>) -> Result<usize> {
     }
 
     let mut total: i64 = live.iter().map(|(_, _, b)| b).sum();
-    let mut evicted = 0;
+    let (mut evicted, mut freed) = (0, 0u64);
     for (id, name, bytes) in live {
         if total <= max {
             break;
@@ -198,17 +198,69 @@ pub async fn evict(app: &App, keep: Option<(&str, &str)>) -> Result<usize> {
             .await?;
         total -= bytes;
         evicted += 1;
+        freed += bytes as u64;
     }
-    Ok(evicted)
+    Ok((evicted, freed))
 }
 
-/// Remove everything cached for one GIF (used when it is purged).
-pub async fn remove_gif(app: &App, id: &str) {
-    let _ = tokio::fs::remove_dir_all(app.cfg.cache_gif_dir(id)).await;
-    let _ = sqlx::query("DELETE FROM variants WHERE gif_id = ? AND tier = 'cache'")
-        .bind(id)
-        .execute(&app.db)
-        .await;
+/// Empty the cache now (`DELETE /cache`, `unigif gc` does not). Conversions
+/// in progress are skipped: their `.part` files and the finished files a
+/// request is waiting on. A file that is being streamed keeps streaming (the
+/// open handle outlives the unlink). Returns (files, bytes) removed.
+pub async fn clear(app: &App) -> Result<(u64, u64)> {
+    let _guard = app.evicting.lock().await;
+    let busy: std::collections::HashSet<String> =
+        app.inflight.0.lock().unwrap_or_else(|e| e.into_inner()).keys().cloned().collect();
+    let (mut files, mut bytes) = (0u64, 0u64);
+    let mut shards = match tokio::fs::read_dir(&app.cfg.cache_dir).await {
+        Ok(r) => r,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((0, 0)),
+        Err(e) => return Err(e).context("reading the cache directory"),
+    };
+    while let Some(shard) = shards.next_entry().await? {
+        if !shard.file_type().await?.is_dir() {
+            continue;
+        }
+        let mut gifs = tokio::fs::read_dir(shard.path()).await?;
+        while let Some(gif) = gifs.next_entry().await? {
+            let id = gif.file_name().to_string_lossy().into_owned();
+            if !gif.file_type().await?.is_dir() || !crate::media::valid_id(&id) {
+                continue;
+            }
+            let mut entries = tokio::fs::read_dir(gif.path()).await?;
+            while let Some(f) = entries.next_entry().await? {
+                let name = f.file_name().to_string_lossy().into_owned();
+                if name.ends_with(".part") || busy.contains(&format!("{id}/{name}")) {
+                    continue;
+                }
+                let len = f.metadata().await.map(|m| m.len()).unwrap_or(0);
+                if tokio::fs::remove_file(f.path()).await.is_ok() {
+                    files += 1;
+                    bytes += len;
+                    sqlx::query("DELETE FROM variants WHERE gif_id = ? AND name = ? AND tier = 'cache'")
+                        .bind(&id)
+                        .bind(&name)
+                        .execute(&app.db)
+                        .await?;
+                }
+            }
+            let _ = tokio::fs::remove_dir(gif.path()).await; // only succeeds once empty
+        }
+        let _ = tokio::fs::remove_dir(shard.path()).await;
+    }
+    // Rows whose files were already gone (the directory edited by hand).
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT gif_id, name FROM variants WHERE tier = 'cache'").fetch_all(&app.db).await?;
+    for (id, name) in rows {
+        if tokio::fs::metadata(app.cfg.cache_gif_dir(&id).join(&name)).await.is_err() {
+            sqlx::query("DELETE FROM variants WHERE gif_id = ? AND name = ? AND tier = 'cache'")
+                .bind(&id)
+                .bind(&name)
+                .execute(&app.db)
+                .await?;
+        }
+    }
+    Ok((files, bytes))
 }
 
 /// Files and bytes in the cache, for the storage numbers.

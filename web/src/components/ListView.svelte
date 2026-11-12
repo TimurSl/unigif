@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { batchChange, restoreMany } from '../lib/actions';
   import { type Gif } from '../lib/api';
-  import { app, emitGif, errorText, loadRecent, onGifEvent, onResync, refreshStats, refreshTopTags, toast } from '../lib/app.svelte';
+  import { app, emitGif, errorText, loadRecent, onGifEvent, onResync, refreshStats, refreshTopTags, setPref, toast } from '../lib/app.svelte';
   import { Feed } from '../lib/feed.svelte';
   import { href, linkClick, navigate, openGif, route } from '../lib/router.svelte';
   import { Selection } from '../lib/selection.svelte';
@@ -30,7 +30,7 @@
   const feed = new Feed(() =>
     view === 'unsorted'
       ? { unsorted: true, sort: app.prefs.unsorted_sort }
-      : { q: query || undefined, sort: 'new' },
+      : { q: query || undefined, sort: app.prefs.library_sort },
   );
 
   const selectedGifs = $derived(feed.items.filter((g) => selection.has(g.id)));
@@ -38,11 +38,12 @@
   let lastKey = '';
   let debounce: ReturnType<typeof setTimeout> | undefined;
   $effect(() => {
-    const key = `${view}|${view === 'unsorted' ? app.prefs.unsorted_sort : query}`;
+    const key = `${view}|${view === 'unsorted' ? app.prefs.unsorted_sort : `${app.prefs.library_sort}|${query}`}`;
     if (key === lastKey) return;
     const first = lastKey === '';
     lastKey = key;
     clearTimeout(debounce);
+    newResults = false;
     if (first) void feed.reset();
     else debounce = setTimeout(() => void feed.reset(), 120);
   });
@@ -53,13 +54,17 @@
   // Changes from the tag sheet, other tabs and the API (live updates) are mirrored in the grid.
   onMount(() => {
     const off = onGifEvent((kind, g) => {
-      if (kind === 'removed') feed.remove(g.id);
-      else if (kind === 'changed') {
-        if (!matchesChips(g) || (view === 'unsorted' && g.tags.length > 0)) feed.remove(g.id);
-        else feed.replace(g);
-      } else if (kind === 'added' && matchesTop(g)) feed.prepend(g);
+      if (kind === 'removed') return feed.remove(g.id);
+      const fits = belongs(g);
+      if (fits === false) return feed.remove(g.id);
+      if (feed.has(g.id)) return feed.replace(g);
+      // New to this list (uploaded, restored, or newly matching the search): put it at its place, or say
+      // there is something new when its place is further down than what has been loaded.
+      if (fits && !feed.insertSorted(g, view === 'unsorted' ? app.prefs.unsorted_sort : app.prefs.library_sort)) {
+        newResults = true;
+      }
     });
-    const offResync = onResync(() => void feed.reset());
+    const offResync = onResync(reload);
     return () => {
       off();
       offResync();
@@ -74,10 +79,21 @@
     return chips.every((c) => (c.startsWith('-') ? !g.tags.includes(c.slice(1)) : g.tags.includes(c)));
   }
 
-  /** New uploads show up at the top of lists they belong in. */
-  function matchesTop(g: Gif): boolean {
-    if (view === 'unsorted') return g.tags.length === 0 && app.prefs.unsorted_sort === 'new';
-    return draft.trim() === '' && matchesChips(g);
+  /**
+   * Does the GIF belong in the list as it is filtered now? `null` when that cannot be told here: the
+   * search box holds a half-typed word, which the server matches as a prefix.
+   */
+  function belongs(g: Gif): boolean | null {
+    if (view === 'unsorted') return g.tags.length === 0;
+    if (!matchesChips(g)) return false;
+    return draft.trim() === '' ? true : null;
+  }
+
+  /** Some GIF now belongs further down than has been loaded. */
+  let newResults = $state(false);
+  function reload() {
+    newResults = false;
+    void feed.reset();
   }
 
   function setChips(next: string[]) {
@@ -199,6 +215,15 @@
   {#if view === 'library'}
     <div class="sub">
       <span class="muted">{chips.length === 0 && !draft ? `${total} ${total === 1 ? 'GIF' : 'GIFs'}` : ''}</span>
+      <div class="sort" role="group" aria-label="Order" data-testid="library-sort">
+        {#each [['new', 'Newest'], ['used', 'Most used'], ['old', 'Oldest']] as [value, label] (value)}
+          <button
+            type="button"
+            aria-pressed={app.prefs.library_sort === value}
+            onclick={() => setPref('library_sort', value as 'new' | 'used' | 'old')}>{label}</button
+          >
+        {/each}
+      </div>
     </div>
   {/if}
 
@@ -211,6 +236,10 @@
     </nav>
   {/if}
 
+  {#if newResults}
+    <button class="new-results" type="button" onclick={reload} data-testid="new-results">New results · reload</button>
+  {/if}
+
   <Grid
     items={feed.items}
     loading={feed.loading}
@@ -220,6 +249,8 @@
     onend={() => void feed.more()}
     selecting={selection.active}
     selected={(id) => selection.has(id)}
+    onband={(ids) => selection.band(ids)}
+    onbandend={() => selection.endBand()}
   >
     {#snippet empty()}
       {#if view === 'unsorted'}
@@ -278,9 +309,45 @@
     padding: 12px 16px;
   }
   .sub {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
     padding: 0 16px 8px;
     min-height: 28px;
     font-size: 13px;
+  }
+  .new-results {
+    align-self: center;
+    margin: 0 0 8px;
+    min-height: 32px;
+    padding: 0 14px;
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--text);
+    font-size: 13px;
+  }
+  .sort {
+    display: inline-flex;
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    overflow: hidden;
+  }
+  .sort button {
+    min-height: 28px;
+    padding: 0 12px;
+    border: 0;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+  .sort button + button {
+    border-left: 1px solid var(--border-strong);
+  }
+  .sort button[aria-pressed='true'] {
+    background: var(--accent);
+    color: var(--on-accent);
   }
   .muted {
     color: var(--text-muted);

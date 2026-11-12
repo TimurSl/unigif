@@ -37,7 +37,15 @@ pub async fn stats(State(app): State<App>, Auth(p): Auth) -> Result<Json<Value>,
     })))
 }
 
-/// Server-sent events: `gif.added`, `gif.ready`, `gif.tagged`, `gif.deleted`,
+/// `DELETE /cache`: drop every cached conversion now. They are made again
+/// the next time they are asked for.
+pub async fn clear_cache(State(app): State<App>, Auth(p): Auth) -> Result<Json<Value>, ApiError> {
+    p.require(Scope::Admin)?;
+    let (files, bytes) = crate::cache::clear(&app).await?;
+    Ok(Json(json!({ "files": files, "bytes": bytes })))
+}
+
+/// Server-sent events: `gif.added`, `gif.ready`, `gif.failed`, `gif.tagged`, `gif.deleted`,
 /// each carrying `{"id": …}`. A subscriber that falls behind gets a `resync`
 /// event and should reload. Events about GIFs the key cannot see are dropped.
 pub async fn events(

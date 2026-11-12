@@ -255,6 +255,20 @@ paths:
         "400": {$ref: '#/components/responses/Problem'}
         "401": {$ref: '#/components/responses/Problem'}
         "403": {$ref: '#/components/responses/Problem'}
+  /gifs/trash/empty:
+    post:
+      tags: [gifs]
+      summary: Empty the trash now
+      description: Purges every trashed GIF the caller can see, whatever its age, with its files and cached conversions. Cannot be undone.
+      x-scope: delete
+      responses:
+        "200":
+          description: How many GIFs were purged
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TrashEmptied'}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
   /gifs/{id}:
     parameters:
       - {name: id, in: path, required: true, schema: {type: string}}
@@ -349,6 +363,32 @@ paths:
         "401": {$ref: '#/components/responses/Problem'}
         "403": {$ref: '#/components/responses/Problem'}
         "404": {$ref: '#/components/responses/Problem'}
+  /gifs/{id}/convert:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string}}
+    post:
+      tags: [gifs]
+      summary: Start the on-demand conversions now ("convert now")
+      description: |
+        Returns at once. The named formats are converted in the background, so the first request for them is
+        served from the cache. Formats already cached or being converted are not repeated. `{}` starts all four.
+      x-scope: read
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ConvertRequest'}
+      responses:
+        "202":
+          description: Started
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ConvertStarted'}
+        "400": {$ref: '#/components/responses/Problem'}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
+        "404": {$ref: '#/components/responses/Problem'}
+        "409": {$ref: '#/components/responses/Problem'}
   /tags:
     get:
       tags: [tags]
@@ -596,12 +636,26 @@ paths:
               schema: {$ref: '#/components/schemas/Stats'}
         "401": {$ref: '#/components/responses/Problem'}
         "403": {$ref: '#/components/responses/Problem'}
+  /cache:
+    delete:
+      tags: [system]
+      summary: Clear the conversion cache
+      description: Deletes every cached on-demand file (GIF, WebM, WebP). Conversions in progress are skipped. Files are converted again the next time they are requested.
+      x-scope: admin
+      responses:
+        "200":
+          description: What was removed
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CacheCleared'}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
   /events:
     get:
       tags: [system]
       summary: Server-sent events
       description: |
-        `gif.added`, `gif.ready`, `gif.tagged`, `gif.deleted`; each `data` is `{"id": "…"}`. A subscriber that falls
+        `gif.added`, `gif.ready`, `gif.failed` (processing gave up), `gif.tagged`, `gif.deleted`; each `data` is `{"id": "…"}`. A subscriber that falls
         behind receives `resync` and should reload. Events about GIFs the key cannot see are not sent.
       x-scope: read
       responses:
@@ -787,7 +841,7 @@ components:
           oneOf: [{$ref: '#/components/schemas/MediaFile'}, {type: "null"}]
     Gif:
       type: object
-      required: [id, status, tags, description, width, height, duration_ms, has_alpha, thumbhash, source, created_at, sorted_at, page_url, media]
+      required: [id, status, tags, description, width, height, duration_ms, has_alpha, bytes_original, original_kept, thumbhash, source, created_at, sorted_at, page_url, media]
       properties:
         id: {type: string, minLength: 12, maxLength: 12}
         page_url: {type: string, description: 'Public share page with OpenGraph tags. /g/{id}.mp4, .gif, .webm and .webp redirect to the file'}
@@ -800,6 +854,8 @@ components:
         height: {type: [integer, "null"]}
         duration_ms: {type: [integer, "null"]}
         has_alpha: {type: boolean}
+        bytes_original: {type: integer, description: Size of the file as it was added}
+        original_kept: {type: boolean, description: Whether that file is kept next to the MP4 (by default only sources with transparency; see media.keepOriginals)}
         thumbhash: {type: [string, "null"], description: Base64 ThumbHash placeholder}
         source:
           type: object
@@ -854,6 +910,32 @@ components:
         add: {type: array, items: {type: string}}
         remove: {type: array, items: {type: string}}
         trash: {type: boolean}
+    ConvertRequest:
+      type: object
+      properties:
+        variants:
+          type: array
+          items: {type: string, enum: [gif, preview_gif, webm, webp]}
+          description: Names as in the GIF's `media` object. Empty or missing means all four.
+    ConvertStarted:
+      type: object
+      required: [started]
+      properties:
+        started:
+          type: array
+          items: {type: string}
+          description: File names of the conversions started (or already cached)
+    TrashEmptied:
+      type: object
+      required: [purged]
+      properties:
+        purged: {type: integer}
+    CacheCleared:
+      type: object
+      required: [files, bytes]
+      properties:
+        files: {type: integer}
+        bytes: {type: integer}
     BatchResult:
       type: object
       required: [updated, not_found]

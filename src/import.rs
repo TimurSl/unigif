@@ -1,4 +1,5 @@
-//! `unigif import <dir>`: bulk-add an existing folder of GIFs and videos.
+//! `unigif import <dir>`: bulk-add an existing folder of GIFs and videos, or
+//! restore an archive written by `unigif export`.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -27,6 +28,16 @@ pub struct Options {
 }
 
 pub async fn run(app: &App, opts: &Options) -> Result<Summary> {
+    if opts.dir.is_file() {
+        if !crate::export::is_export(&opts.dir) {
+            anyhow::bail!("{} is a file but not a unigif export archive", opts.dir.display());
+        }
+        let r = crate::export::import(app, &opts.dir).await?;
+        let mut summary =
+            Summary { added: r.added, duplicates: r.duplicates, rejected: r.rejected, failed: 0 };
+        summary.failed = wait_for(app, &r.queued).await?;
+        return Ok(summary);
+    }
     let mut files = Vec::new();
     collect(&opts.dir, &mut files).with_context(|| format!("reading {}", opts.dir.display()))?;
     files.sort();
@@ -63,16 +74,23 @@ pub async fn run(app: &App, opts: &Options) -> Result<Summary> {
         }
     }
 
+    summary.failed = wait_for(app, &ids).await?;
+    Ok(summary)
+}
+
+/// Wait until the workers are idle; returns how many of `ids` failed.
+async fn wait_for(app: &App, ids: &[String]) -> Result<usize> {
     println!("waiting for {} transcodes…", ids.len());
     while !worker::idle(app).await? {
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-    for id in &ids {
+    let mut failed = 0;
+    for id in ids {
         if gifs::get(&app.db, id).await?.is_some_and(|g| g.status == "failed") {
-            summary.failed += 1;
+            failed += 1;
         }
     }
-    Ok(summary)
+    Ok(failed)
 }
 
 fn collect(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {

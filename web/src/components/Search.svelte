@@ -5,6 +5,7 @@
   import { normalizeTag } from '../lib/hashtags';
   import { href, navigate, route } from '../lib/router.svelte';
   import SearchTile from './SearchTile.svelte';
+  import SelectionBar from './SelectionBar.svelte';
 
   type AddState = 'idle' | 'adding' | 'added' | 'have';
 
@@ -21,6 +22,11 @@
   /** What has been added in this visit, by `provider:id`, so it still shows after a new search. */
   let added: Record<string, AddState> = $state({});
   let gen = 0;
+  /** Select mode: pick several results and save them together. */
+  let selecting = $state(false);
+  let picked: string[] = $state([]);
+  let lastPicked: string | null = null;
+  let saving = $state(false);
 
   const provider = $derived(providers?.find((p) => p.id === route.provider) ?? providers?.find((p) => p.configured) ?? providers?.[0] ?? null);
   const tags = $derived(
@@ -52,6 +58,7 @@
 
   async function reset(p: SearchProvider) {
     gen++;
+    picked = [];
     items = [];
     cursor = null;
     error = '';
@@ -106,25 +113,81 @@
     navigate(`/search${params(id, route.q)}`, { replace: true });
   }
 
-  async function add(item: SearchItem) {
+  /** Save one result. Resolves to `added`, `have` or `failed`; `quiet` leaves the messages to the caller. */
+  async function add(item: SearchItem, quiet = false): Promise<'added' | 'have' | 'failed'> {
     const p = provider;
-    if (!p) return;
+    if (!p) return 'failed';
     const k = `${p.id}:${item.id}`;
     added[k] = 'adding';
     try {
       const gif: Gif = await api.addFromSearch(p.id, item, tags);
       added[k] = gif.duplicate ? 'have' : 'added';
-      if (gif.duplicate) toast(tags.length ? 'Already in your library; hashtags were merged in.' : 'Already in your library.');
+      if (gif.duplicate && !quiet) toast(tags.length ? 'Already in your library; hashtags were merged in.' : 'Already in your library.');
       emitGif('added', gif);
-      void refreshStats();
-      if (tags.length) refreshTopTags(true);
+      if (!quiet) {
+        void refreshStats();
+        if (tags.length) refreshTopTags(true);
+      }
+      return added[k] as 'added' | 'have';
     } catch (e) {
       added[k] = 'idle';
-      toast(errorText(e), { kind: 'error' });
+      if (!quiet) toast(errorText(e), { kind: 'error' });
+      return 'failed';
     }
   }
 
+  const status = (item: SearchItem) => added[`${provider?.id}:${item.id}`] ?? 'idle';
+  const pickable = $derived(items.filter((i) => status(i) === 'idle'));
+
+  function toggle(item: SearchItem, e: MouseEvent) {
+    // Shift-click ticks everything between the last pick and this one, as in the library.
+    if (e.shiftKey && lastPicked) {
+      const ids = pickable.map((i) => i.id);
+      const [a, b] = [ids.indexOf(lastPicked), ids.indexOf(item.id)].sort((x, y) => x - y);
+      if (a >= 0) {
+        picked = [...new Set([...picked, ...ids.slice(a, b + 1)])];
+        lastPicked = item.id;
+        return;
+      }
+    }
+    picked = picked.includes(item.id) ? picked.filter((id) => id !== item.id) : [...picked, item.id];
+    lastPicked = item.id;
+  }
+
+  function stopSelecting() {
+    selecting = false;
+    picked = [];
+    lastPicked = null;
+  }
+
+  /** Save every ticked result, six at a time, with the hashtags in the box. */
+  async function saveSelected() {
+    const queue = items.filter((i) => picked.includes(i.id) && status(i) === 'idle');
+    if (!queue.length) return;
+    saving = true;
+    const total = queue.length;
+    const counts = { added: 0, have: 0, failed: 0 };
+    const worker = async () => {
+      for (let item = queue.shift(); item; item = queue.shift()) counts[await add(item, true)]++;
+    };
+    await Promise.all(Array.from({ length: Math.min(6, total) }, worker));
+    saving = false;
+    void refreshStats();
+    if (tags.length) refreshTopTags(true);
+    const parts = [`${counts.added} saved`];
+    if (counts.have) parts.push(`${counts.have} already in your library`);
+    if (counts.failed) parts.push(`${counts.failed} failed`);
+    toast(parts.join(', '), { kind: counts.failed ? 'error' : 'info' });
+    // Keep the failed ones ticked so they can be retried.
+    picked = picked.filter((id) => items.some((i) => i.id === id && status(i) === 'idle'));
+    if (picked.length === 0) stopSelecting();
+  }
+
   function onWindowKey(e: KeyboardEvent) {
+    if (e.key === 'Escape' && selecting && !saving) {
+      stopSelecting();
+      return;
+    }
     if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
     const t = e.target as HTMLElement | null;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
@@ -164,6 +227,15 @@
         {/each}
       </div>
     {/if}
+    {#if provider?.configured}
+      <button
+        class="btn"
+        type="button"
+        aria-pressed={selecting}
+        disabled={!selecting && pickable.length === 0}
+        onclick={() => (selecting ? stopSelecting() : (selecting = true))}>{selecting ? 'Done' : 'Select'}</button
+      >
+    {/if}
   </div>
 
   <div class="sub">
@@ -201,7 +273,14 @@
       {#if !route.q && items.length}<p class="muted label">Trending on {provider?.name}</p>{/if}
       <div class="grid">
         {#each items as item (item.id)}
-          <SearchTile {item} status={added[`${provider?.id}:${item.id}`] ?? 'idle'} onadd={add} />
+          <SearchTile
+            {item}
+            status={status(item)}
+            onadd={(i) => void add(i)}
+            {selecting}
+            selected={picked.includes(item.id)}
+            ontoggle={toggle}
+          />
         {/each}
       </div>
       {#if loading}<p class="status">Loading…</p>{/if}
@@ -212,6 +291,19 @@
       <div bind:this={sentinel} class="sentinel"></div>
     {/if}
   </div>
+
+  {#if selecting}
+    <SelectionBar
+      count={picked.length}
+      loaded={pickable.length}
+      onall={() => (picked = pickable.map((i) => i.id))}
+      oncancel={stopSelecting}
+    >
+      <button class="btn primary" type="button" disabled={picked.length === 0 || saving} onclick={saveSelected}>
+        {saving ? 'Saving…' : `Save ${picked.length || ''}`.trim()}
+      </button>
+    </SelectionBar>
+  {/if}
 </section>
 
 <style>

@@ -26,7 +26,7 @@ function muted(id: string): boolean {
   return true;
 }
 
-type Kind = 'gif.added' | 'gif.ready' | 'gif.tagged' | 'gif.deleted';
+type Kind = 'gif.added' | 'gif.ready' | 'gif.failed' | 'gif.tagged' | 'gif.deleted';
 const pending = new Map<string, Kind>();
 let flushTimer: ReturnType<typeof setTimeout> | undefined;
 /// More changed GIFs than this in one burst: reload the lists instead of fetching each one.
@@ -74,7 +74,7 @@ export function startLive() {
   if (source || typeof EventSource === 'undefined') return;
   const es = new EventSource('/api/v1/events');
   source = es;
-  for (const kind of ['gif.added', 'gif.ready', 'gif.tagged', 'gif.deleted'] as const) {
+  for (const kind of ['gif.added', 'gif.ready', 'gif.failed', 'gif.tagged', 'gif.deleted'] as const) {
     es.addEventListener(kind, (e) => {
       try {
         const { id } = JSON.parse((e as MessageEvent<string>).data) as { id: string };

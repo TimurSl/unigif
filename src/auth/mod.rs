@@ -250,6 +250,31 @@ async fn authenticate(app: &App, req: &mut Request, rate: &mut Option<RateHeader
     Ok(())
 }
 
+/// The caller of a request outside `/api/v1` (media and share pages in
+/// private mode): a key or a session cookie, or `None`. No rate limit or CSRF
+/// rule applies, since these are plain GETs.
+pub async fn resolve(app: &App, headers: &HeaderMap) -> Result<Option<Principal>, ApiError> {
+    let now = now_ms();
+    if let Some(token) = presented_key(headers)? {
+        return key_principal(app, &token, now).await.map(Some);
+    }
+    session_principal(app, headers, now).await
+}
+
+/// In private media mode, the GIF must be visible to a caller with `read`.
+/// Hidden GIFs are a 404, like everywhere else. A no-op when media is public.
+pub async fn check_media_access(app: &App, headers: &HeaderMap, gif_id: &str) -> Result<(), ApiError> {
+    if app.cfg.media.public {
+        return Ok(());
+    }
+    let p = resolve(app, headers).await?.ok_or(ApiError::Unauthorized)?;
+    p.require(Scope::Read)?;
+    if p.visibility().hides(&app.db, gif_id).await? {
+        return Err(ApiError::NotFound("no such media"));
+    }
+    Ok(())
+}
+
 /// Keys in query strings end up in logs, so they are refused outright.
 fn reject_key_in_query(req: &Request) -> Result<(), ApiError> {
     let Some(q) = req.uri().query() else { return Ok(()) };
