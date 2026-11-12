@@ -45,6 +45,14 @@ export function uploadUrl(url: string) {
   void run([() => api.addUrl(url)]);
 }
 
+/** Content shared into the app: files and links in one run, one progress indicator. */
+export function uploadShared(files: File[], urls: string[]) {
+  const usable = files.filter(isAnimation);
+  const jobs = [...usable.map((f) => () => api.upload(f, f.type)), ...urls.map((u) => () => api.addUrl(u))];
+  if (jobs.length) void run(jobs);
+  else toast('Nothing to add: only GIFs, images, videos and links can be shared here.', { kind: 'error' });
+}
+
 export function looksLikeUrl(text: string): boolean {
   return /^https?:\/\/\S+$/i.test(text.trim());
 }

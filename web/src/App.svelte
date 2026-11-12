@@ -1,19 +1,44 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { app, boot } from './lib/app.svelte';
-  import { route } from './lib/router.svelte';
-  import { looksLikeUrl, uploadFiles, uploadUrl } from './lib/upload';
+  import { app, boot, toast } from './lib/app.svelte';
+  import { navigate, route } from './lib/router.svelte';
+  import { takeShared } from './lib/share';
+  import { looksLikeUrl, uploadFiles, uploadShared, uploadUrl } from './lib/upload';
+  import AddSheet from './components/AddSheet.svelte';
   import Detail from './components/Detail.svelte';
   import ListView from './components/ListView.svelte';
   import Login from './components/Login.svelte';
+  import Settings from './components/Settings.svelte';
   import Sidebar from './components/Sidebar.svelte';
   import Toasts from './components/Toasts.svelte';
 
   let picker: HTMLInputElement | undefined = $state();
   let dragging = $state(false);
+  let adding = $state(false);
   let depth = 0;
 
   onMount(() => void boot());
+
+  // Something shared into the installed app (Android share target) waits in the worker's stash until
+  // we are signed in; then it is uploaded and the app lands in Unsorted.
+  let importing = false;
+  $effect(() => {
+    if (app.phase !== 'ready' || importing) return;
+    importing = true;
+    void importShared().finally(() => (importing = false));
+  });
+
+  async function importShared() {
+    const arrived = location.pathname === '/share-received';
+    const shared = await takeShared().catch(() => null);
+    if (!shared || (shared.files.length === 0 && shared.urls.length === 0 && !shared.ignoredText)) {
+      if (arrived) navigate('/', { replace: true });
+      return;
+    }
+    navigate('/unsorted', { replace: true });
+    if (shared.files.length || shared.urls.length) uploadShared(shared.files, shared.urls);
+    else toast('Nothing to add: the shared text had no link in it.', { kind: 'error' });
+  }
 
   const hasFiles = (e: DragEvent) => e.dataTransfer?.types.includes('Files') ?? false;
 
@@ -64,9 +89,13 @@
   <Login />
 {:else}
   <div class="shell">
-    <Sidebar />
+    <Sidebar onadd={() => (adding = true)} />
     {#key route.view}
-      <ListView view={route.view === 'unsorted' ? 'unsorted' : 'library'} onupload={() => picker?.click()} />
+      {#if route.view === 'settings'}
+        <Settings />
+      {:else}
+        <ListView view={route.view === 'unsorted' ? 'unsorted' : 'library'} onupload={() => picker?.click()} />
+      {/if}
     {/key}
   </div>
   {#if route.gif}
@@ -84,6 +113,9 @@
       e.currentTarget.value = '';
     }}
   />
+  {#if adding}
+    <AddSheet onpick={() => picker?.click()} onclose={() => (adding = false)} />
+  {/if}
   {#if app.upload}
     <p class="uploading" role="status">Uploading {Math.min(app.upload.done + 1, app.upload.total)} of {app.upload.total}…</p>
   {/if}

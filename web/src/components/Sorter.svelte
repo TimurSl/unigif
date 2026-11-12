@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api, mediaPath, type Gif } from '../lib/api';
+  import { trashGif } from '../lib/actions';
   import { app, emitGif, errorText, loadRecent, noteSaved, refreshStats, setPref, toast } from '../lib/app.svelte';
+  import { trackVisualViewport } from '../lib/viewport';
   import TagSheet from './TagSheet.svelte';
 
   type Next = { item: Gif | null; remaining: number; total: number };
@@ -72,7 +74,11 @@
   onMount(() => {
     void loadRecent();
     void start();
+    const stopViewport = trackVisualViewport();
+    document.documentElement.classList.add('sheet-open');
     return () => {
+      stopViewport();
+      document.documentElement.classList.remove('sheet-open');
       for (const v of keepAlive) v.removeAttribute('src');
       opener?.focus?.();
       void refreshStats();
@@ -166,27 +172,7 @@
   function trash() {
     const g = current;
     if (!g) return;
-    api
-      .trash(g.id)
-      .then(() => {
-        emitGif('removed', g);
-        void refreshStats();
-        toast('Moved to trash', {
-          action: {
-            label: 'Undo',
-            run: () =>
-              api
-                .restore(g.id)
-                .then((r) => {
-                  emitGif('added', r);
-                  void refreshStats();
-                })
-                .catch((e) => toast(errorText(e), { kind: 'error' })),
-          },
-          ms: 5000,
-        });
-      })
-      .catch((e) => toast(errorText(e), { kind: 'error' }));
+    void trashGif(g);
     if (mode === 'edit') onclose();
     else void advance();
   }
@@ -244,9 +230,20 @@
   .done p {
     margin: 0;
   }
+  /* Phone: the sheet is the whole screen and ends above the on-screen keyboard. */
   @media (max-width: 720px) {
     .scrim {
+      inset: auto 0 auto 0;
+      top: var(--vv-top, 0px);
+      height: var(--vv-height, 100dvh);
       padding: 0;
+    }
+    .done {
+      width: 100%;
+      height: 100%;
+      align-content: center;
+      border: 0;
+      border-radius: 0;
     }
   }
 </style>

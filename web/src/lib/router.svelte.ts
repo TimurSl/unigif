@@ -1,8 +1,8 @@
-// A very small path router. Routes: / (library), /unsorted, /login. A GIF's detail view is an overlay
+// A very small path router. Routes: / (library), /unsorted, /settings, /login. A GIF's detail view is an overlay
 // on top of the current list, addressed by `?gif=<id>`, so the list underneath keeps its place.
 
 export interface Route {
-  view: 'library' | 'unsorted' | 'login';
+  view: 'library' | 'unsorted' | 'settings' | 'login';
   q: string;
   gif: string | null;
 }
@@ -10,7 +10,13 @@ export interface Route {
 function parse(): Route {
   const params = new URLSearchParams(location.search);
   const path = location.pathname;
-  const view = path.startsWith('/unsorted') ? 'unsorted' : path.startsWith('/login') ? 'login' : 'library';
+  const view = path.startsWith('/unsorted')
+    ? 'unsorted'
+    : path.startsWith('/settings')
+      ? 'settings'
+      : path.startsWith('/login')
+        ? 'login'
+        : 'library';
   return { view, q: params.get('q') ?? '', gif: params.get('gif') };
 }
 
@@ -22,7 +28,7 @@ function sync() {
 window.addEventListener('popstate', sync);
 
 export function href(view: Route['view'], q = ''): string {
-  const base = view === 'unsorted' ? '/unsorted' : view === 'login' ? '/login' : '/';
+  const base = view === 'unsorted' ? '/unsorted' : view === 'settings' ? '/settings' : view === 'login' ? '/login' : '/';
   return q ? `${base}?q=${encodeURIComponent(q)}` : base;
 }
 
@@ -30,6 +36,13 @@ export function navigate(to: string, opts: { replace?: boolean } = {}) {
   if (opts.replace) history.replaceState(null, '', to);
   else history.pushState(null, '', to);
   sync();
+}
+
+/** Click handler for in-app links: plain clicks navigate without a reload, modified clicks keep the browser's behaviour. */
+export function linkClick(e: MouseEvent, to: string) {
+  if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+  e.preventDefault();
+  navigate(to);
 }
 
 function withGif(id: string | null): string {

@@ -45,6 +45,13 @@
   .toast.error {
     border-color: var(--danger);
   }
+  /* Phone: at the top, so a toast never covers the tab bar or a pinned Save button. */
+  @media (max-width: 639px) {
+    .toasts {
+      top: calc(56px + env(safe-area-inset-top));
+      bottom: auto;
+    }
+  }
   button {
     border: 0;
     background: transparent;

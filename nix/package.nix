@@ -27,6 +27,7 @@ let
         ../web/vite.config.ts
         ../web/svelte.config.js
         ../web/src
+        ../web/public
       ];
     };
     npmDepsHash = "sha256-1u7DmhOcj59LjOuPKvlJZxXI+vigSSn3FwiPEJqDGKU=";
