@@ -2,7 +2,7 @@
 
 A self-hosted, hashtag-first GIF library with a scoped-key API, MP4-based storage, a keyboard-driven sorting flow, a mobile UI, and first-class NixOS packaging. Built so that Telegram clients, bots, and your own social network can use it as a GIF provider.
 
-Status: **M0 to M7 are implemented** (see section 13 for what that covers and where the code departs from this text). Stack, media visibility, tenancy, originals policy, and licence are confirmed by the owner (section 14). Items marked **(verify)** are facts I could not fully confirm during research and must be checked when that part is built.
+Status: **M0 to M7 are implemented** (see section 13 for what that covers and where the code departs from this text). **M8** (section 13.2) lists what is still missing. Stack, media visibility, tenancy, originals policy, and licence are confirmed by the owner (section 14). Items marked **(verify)** are facts I could not fully confirm during research and must be checked when that part is built.
 
 ---
 
@@ -892,6 +892,7 @@ Sizes are relative (S / M / L), not time estimates.
 | M5 ✅ | **Conversion**: on-demand GIF / WebM / WebP, cache with eviction, share page with OpenGraph, storage stats | M | `full.gif` is generated once and served from cache after; the cache stays under its limit |
 | M6 ✅ | **NixOS**: module, hardening, nginx integration, backup timer, VM test, deployment guide | M | The VM test in 10.4 passes; the service runs on the VPS |
 | M7 ✅ | **Polish**: hashtag management (rename, merge), trash, batch select, co-occurrence suggestions, live updates over SSE, API key screen refinements | M | Renaming or merging a hashtag updates every GIF; a GIF added through the API appears in an open Unsorted tab without a reload |
+| M8 | **Completion**: the parts of sections 4 to 12 that M0 to M7 left out: `export` and `gc`, Empty trash, Clear cache, the Account screen, private media mode, original-size and description in the UI, usage pings, the scale test (full list in 13.2) | M | Every row of 13.2 is done or struck from the plan with a reason; section 9.6 matches the app screen for screen |
 
 ### 13.1 Implementation notes (M0 to M7)
 
@@ -991,6 +992,62 @@ Built in this order, and verified by `cargo test` (46 unit tests and 68 integrat
 - **Not verified against the live APIs.** The response shapes were written from the providers' public descriptions without access to their documentation or a key from this environment; check a real search with each key and adjust `parse_giphy` / `parse_klipy` if a field differs.
 
 M0 to M6 are the "storage accessor" you asked for first; M7 is the polish on top.
+
+### 13.2 M8: what is left (not started)
+
+Everything sections 1 to 12 promise that the code does not do yet, found by checking the plan against the tree after M7 (routes in `src/api/mod.rs`, subcommands in `src/main.rs`, the Svelte components, the tests and the flake). Nothing here is new scope, except the three endpoints marked **(new)**, which the 8.3 table lacks and the promised screens need. They only add to v1.
+
+**A. Server and CLI**
+
+| # | Gap | Promised in | State today | To do |
+|---|---|---|---|---|
+| A1 | `unigif export <file.zip>` | 4.3 | No subcommand | Stream media plus a JSON manifest (GIFs, hashtags, descriptions, sources) into a zip; a test re-imports it into an empty instance |
+| A2 | `unigif gc` | 4.3 | No subcommand; only the hourly janitor runs | Call the janitor's cache trim and trash purge once and print what was freed |
+| A3 | Empty trash | 9.6 | No endpoint purges on demand; the Trash page has Restore only | `POST /gifs/trash/empty` **(new)**, `delete` scope, honours hidden hashtags; reuses the janitor's purge (files and cache included) |
+| A4 | Clear cache | 9.6 | The cache is only trimmed by size | `DELETE /cache` **(new)**, `admin` scope; skips files being served |
+| A5 | Private media mode, `media.public = false` | 12 | The setting does not exist; `/m` and `/g` are always public | Require a session or a `read` key (hidden hashtags applied) on `/m/*` and `/g/*`; `Cache-Control: private`; documented as breaking embeds |
+| A6 | Keep the smaller of re-encode and original for video sources | 14, M1 notes | A video that cannot be remuxed is always re-encoded, even when the result is larger | After the encode, compare sizes; when the source is an acceptable H.264 MP4 apart from the size target, keep the smaller |
+| A7 | Original size on the GIF object | 9.6 (detail view) | `bytes_original` is only in `/stats` totals | Add `bytes_original` and `original_kept` to the GIF object and to `openapi.yaml` |
+| A8 | An event when processing fails | 8.3, M2 notes | `gif.ready` is emitted on success only; the UI finds a failure by polling | Emit `gif.failed`; `lib/live.ts` handles it |
+| A9 | "Convert now" warm-up | M5 notes | The first requester always waits | `POST /gifs/{id}/convert` **(new)** `{ "variants": [...] }`, `read` scope, returns at once; also used by the detail view's copy buttons |
+| A10 | `doctor` does not check animated WebP decoding | M1 notes | ffmpeg 6.x silently keeps one frame | Decode a two-frame WebP built in memory and warn when one frame comes back |
+
+**B. Web UI**
+
+| # | Gap | Promised in | State today | To do |
+|---|---|---|---|---|
+| B1 | Settings → Account: change password | 9.6 | `POST /auth/password` exists; no form | Form with current and new password; other sessions are signed out |
+| B2 | Settings → Account: active sessions | 7.1, 9.6 | `GET /auth/sessions` and `DELETE /auth/sessions/{id}` exist; no list | List (device, address, last seen, "this one") with Revoke |
+| B3 | "Empty trash" button | 9.6 | Missing (needs A3) | Button with a confirmation that states the count |
+| B4 | "Clear cache" button | 9.6 | Storage shows the numbers only (needs A4) | Button in Settings → Storage |
+| B5 | Detail view: stored against original size | 9.6 | Shows "Stored" only (needs A7) | "183 kB stored · 2.1 MB original" |
+| B6 | Description (alt text) | 5, 8.2 | The API reads and writes it; no UI shows or edits it | Editable field in the detail view; used as `alt` / `aria-label` on tiles |
+| B7 | Usage ping and `sort=used` | 8.3, 5.2 | The web UI never calls `POST /gifs/{id}/use`, and the Library is fixed to newest first | Ping on Copy and Share; add a Newest / Most used / Oldest switch to the Library |
+| B8 | Tap-to-play under reduced motion on a phone | 9.2, M4 notes | Tiles show posters; only the detail view plays | First tap plays, second opens |
+| B9 | A GIF that newly matches an open search is not inserted | M7 notes | It appears after a reload | Insert at its sorted position when it falls inside the loaded range, otherwise show "New results, reload" |
+| B10 | Batch select on third-party search results | M7 notes | One "save" per result | Select several, save all (six requests at a time), optional hashtags for the batch |
+| B11 | Drag-to-select | M7 notes | Click, Shift-click, Ctrl-click only | Rubber band on desktop; skip on touch |
+
+**C. Tests, packaging, docs**
+
+| # | Gap | Promised in | State today | To do |
+|---|---|---|---|---|
+| C1 | Scale test | 13 Testing | None; the largest test library is a handful of GIFs | Seed 50 000 rows (no media), assert list and search p95 under 50 ms, and scroll the grid in Playwright; run on demand, not on every push |
+| C2 | Flake checks | 10.1 | `checks` holds the package build (cargo tests) and the VM test; clippy, rustfmt and the web checks run only in GitHub Actions | Add `clippy`, `fmt`, `svelte-check` and the JS budget as checks, or correct 10.1 to say CI owns them |
+| C3 | `aarch64-linux` | 10.1 | Evaluated, never built | Build the package once (CI arm runner or the owner's machine) and fix what breaks |
+| C4 | iOS Shortcut | 9.5 | The app mentions it; no instructions anywhere | A section in `docs/` with the Shortcut steps and an Uploader key |
+| C5 | `testdata/` | 4.1, 13 Testing | Does not exist; tests generate fixtures with ffmpeg | Either add the hard cases ffmpeg cannot synthesise (variable frame delays, truncated file) as small files, or drop `testdata/` from 4.1 |
+| C6 | README and `openapi.yaml` | 8.1 | Up to date with M7 | Update for A1 to A10 as they land; contract tests cover the new operations |
+
+**Owner's steps (cannot be done from a build environment)**
+
+- Deploy on the real VPS following `docs/deployment.md` (M6).
+- Check the app on a real iPhone: keyboard pinning, Add to Home Screen, the Shortcut (M4).
+- Run one real search per provider with a KLIPY and a GIPHY key and report any field that does not parse (`parse_klipy`, `parse_giphy`).
+
+**Suggested order**: A3, A4, A7, B1 to B6 first (they finish section 9.6); then A1, A2, A6, A8, A10 (CLI and pipeline); then A5; then B7 to B11 and A9; C items alongside the work they test.
+
+**Out of M8**: near-duplicate detection (the dHash is stored but nothing reads it; section 5 marks it "for later"), passkeys / TOTP / OIDC (7.1 "later, optional"), AI auto-tagging, and everything in "Later, not scheduled" below.
 
 **Later, not scheduled**: Telegram integration (section 11), a Tenor/Klipy-shaped adapter, and wiring Unigif into the social network as its GIF provider.
 
