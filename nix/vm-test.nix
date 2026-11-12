@@ -112,8 +112,15 @@ pkgs.testers.runNixOSTest {
         src_size = int(machine.succeed("stat -c %s /tmp/fixture.gif").strip())
         _, gif = api("POST", "/api/v1/gifs?wait=60", token=upload_key, ctype="image/gif",
                      data_file="/tmp/fixture.gif", expect=201)
-        assert gif["status"] == "ready", gif
         gid = gif["id"]
+        # The default encoder preset is slow, and a VM without KVM is slower still:
+        # the call may return while the worker is still busy, so poll.
+        for _ in range(180):
+            if gif["status"] != "processing":
+                break
+            machine.sleep(5)
+            _, gif = api("GET", f"/api/v1/gifs/{gid}", token=upload_key, expect=200)
+        assert gif["status"] == "ready", gif
         machine.succeed(f"curl -fsS -o /tmp/full.mp4 {base}/m/{gid}/full.mp4")
         assert probe("/tmp/full.mp4", "codec_name,pix_fmt")["codec_name"] == "h264"
         mp4_size = int(machine.succeed("stat -c %s /tmp/full.mp4").strip())
