@@ -29,7 +29,7 @@ let
         ../web/src
       ];
     };
-    npmDepsHash = "sha256-UVwWYR8XZzFStojPGgPUaYh76BF8hm6D+DPG3E+ppts=";
+    npmDepsHash = "sha256-1u7DmhOcj59LjOuPKvlJZxXI+vigSSn3FwiPEJqDGKU=";
     installPhase = ''
       runHook preInstall
       cp -r dist $out

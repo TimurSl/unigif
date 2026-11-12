@@ -8,3 +8,5 @@
 *.db-wal
 *.db-shm
 /data
+/web/test-results
+/web/playwright-report

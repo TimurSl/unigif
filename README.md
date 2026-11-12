@@ -2,7 +2,7 @@
 
 A self-hosted, hashtag-first GIF library. Every GIF carries hashtags; new ones land in **Unsorted** and leave it the moment they get their first hashtag. GIFs are stored as small H.264 MP4s and served in whatever format a client needs, through a documented HTTP API with scoped keys.
 
-The full design is in [`PLAN.md`](PLAN.md). **Status:** milestones M0 (skeleton), M1 (storage core) and M2 (auth and API) are implemented; the web UI and the rest follow the plan's milestone order.
+The full design is in [`PLAN.md`](PLAN.md). **Status:** milestones M0 (skeleton), M1 (storage core), M2 (auth and API) and M3 (web UI) are implemented; mobile polish and the rest follow the plan's milestone order.
 
 ## What works today
 
@@ -11,6 +11,7 @@ The full design is in [`PLAN.md`](PLAN.md). **Status:** milestones M0 (skeleton)
 - **Media** (`GET /m/{id}/{variant}`): public, unguessable-URL, with `Range`, `ETag` and immutable caching.
 - **The API** (`/api/v1`, documented in [`api/openapi.yaml`](api/openapi.yaml), served at `/api/v1/openapi.json` with a rendered reference at `/api/docs`): list and search (`q=cat funny`, `-dog`, prefix on the last word, cursor pagination), edit and tag, trash and restore (purged after 30 days), the unsorted queue (`/gifs/unsorted/next`), batch edits, hashtag list / suggest / rename / merge / delete, usage pings for `sort=used`, stats, and a server-sent event stream.
 - **Auth:** the owner logs in with a password (Argon2id) and gets a `HttpOnly` session cookie; everything else uses scoped API keys (`read`, `upload`, `tag`, `delete`, `admin`) that can also hide hashtags (`deny_tags`), carry an expiry and a rate limit. Cookie writes are CSRF-protected, logins are throttled, keys are rate-limited with `RateLimit-*` headers.
+- **Web UI** (embedded in the binary, served at `/`): sign in, a virtualised masonry **Library** with hashtag search (`cat funny`, `-dog`; `/` focuses the box) and a hashtag sidebar, an **Unsorted** queue, and the **tag sheet** for sorting with the keyboard only: type a hashtag, `Space` makes a chip, `Tab` accepts a suggestion, `Enter` saves and moves to the next GIF, `Alt+1…9` toggles a recent hashtag, `Alt+0` repeats the last GIF's hashtags, `Alt+←/→` goes back or skips, `Shift+Delete` trashes (with Undo), `Esc` closes. Upload by button, drag and drop, or pasting a file or link; a detail view per GIF.
 - **CLI:** `serve`, `doctor`, `import <dir> [--tags-from-folders]`, `user add|passwd`, `key create|list|revoke`.
 
 ## Run it
@@ -18,7 +19,7 @@ The full design is in [`PLAN.md`](PLAN.md). **Status:** milestones M0 (skeleton)
 Needs `ffmpeg` and `ffprobe` (with libx264 and libwebp) on `PATH`.
 
 ```bash
-cd web && npm ci && npm run build && cd ..   # optional: embeds the web UI shell
+cd web && npm ci && npm run build && cd ..   # optional: builds the web UI that the binary embeds
 cargo run -- doctor
 cargo run -- user add timur                      # prompts for a password
 cargo run -- key create --name laptop --preset full   # prints a key once
@@ -111,6 +112,13 @@ All keys and their defaults are in `src/config.rs`.
 cargo test                        # unit + integration tests (real ffmpeg)
 cargo clippy --all-targets -- -D warnings
 cd web && npm run dev             # Vite dev server, proxies /api and /m to :8787
+cd web && npm run check           # svelte-check
+```
+
+End-to-end tests (Playwright, driving a real server and ffmpeg in a throwaway data directory) need the UI built and embedded first:
+
+```bash
+cd web && npm run build && (cd .. && cargo build) && npx playwright install chromium && npm run e2e
 ```
 
 The integration tests synthesise their fixtures with ffmpeg, then drive the real router, SQLite and worker pool.

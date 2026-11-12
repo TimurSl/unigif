@@ -2,7 +2,7 @@
 
 A self-hosted, hashtag-first GIF library with a scoped-key API, MP4-based storage, a keyboard-driven sorting flow, a mobile UI, and first-class NixOS packaging. Built so that Telegram clients, bots, and your own social network can use it as a GIF provider.
 
-Status: **M0, M1 and M2 are implemented** (see section 13 for what that covers and where the code departs from this text). Stack, media visibility, tenancy, originals policy, and licence are confirmed by the owner (section 14). Items marked **(verify)** are facts I could not fully confirm during research and must be checked when that part is built.
+Status: **M0, M1, M2 and M3 are implemented** (see section 13 for what that covers and where the code departs from this text). Stack, media visibility, tenancy, originals policy, and licence are confirmed by the owner (section 14). Items marked **(verify)** are facts I could not fully confirm during research and must be checked when that part is built.
 
 ---
 
@@ -887,15 +887,15 @@ Sizes are relative (S / M / L), not time estimates.
 | M0 ✅ | **Skeleton**: MIT `LICENSE`, flake, dev shell, CI, Rust server serving an embedded empty SPA, `nix build` and `nix run` work | S | A fresh clone builds and starts with one command |
 | M1 ✅ | **Storage core**: schema, migrations, ingest pipeline, stored variants, dedupe, media serving, `import` and `doctor` | L | `curl` quick add of a GIF yields `full.mp4`, `preview.mp4`, `poster.webp`; Range requests work; the same file twice returns `duplicate` |
 | M2 ✅ | **Auth and API**: login, sessions, API keys with scopes and `deny_tags`, rate limits, all section 8 endpoints, OpenAPI served | L | Contract tests pass against `openapi.yaml`; a `read` key gets `403` on upload |
-| M3 | **Web UI**: login, Library, search, Unsorted, tag sheet with every key in 9.4, upload by drag and paste, detail view | L | An end-to-end test sorts three GIFs using only the keyboard |
+| M3 ✅ | **Web UI**: login, Library, search, Unsorted, tag sheet with every key in 9.4, upload by drag and paste, detail view | L | An end-to-end test sorts three GIFs using only the keyboard |
 | M4 | **Mobile and PWA**: responsive layout, bottom bar, full-screen tag sheet, gestures, installable, Android share target | M | The same sorting test passes in a phone viewport; a shared GIF lands in Unsorted |
 | M5 | **Conversion**: on-demand GIF / WebM / WebP, cache with eviction, share page with OpenGraph, storage stats | M | `full.gif` is generated once and served from cache after; the cache stays under its limit |
 | M6 | **NixOS**: module, hardening, nginx integration, backup timer, VM test, deployment guide | M | The VM test in 10.4 passes; the service runs on the VPS |
 | M7 | **Polish**: hashtag management (rename, merge), trash, batch select, co-occurrence suggestions, live updates over SSE, API key screen refinements | M | Renaming or merging a hashtag updates every GIF; a GIF added through the API appears in an open Unsorted tab without a reload |
 
-### 13.1 Implementation notes (M0 to M2)
+### 13.1 Implementation notes (M0 to M3)
 
-Built in this order, and verified by `cargo test` (42 unit tests and 53 integration tests, with real ffmpeg), `cargo clippy -D warnings`, a curl run against the real binary, and `nix build`.
+Built in this order, and verified by `cargo test` (42 unit tests and 53 integration tests, with real ffmpeg), `cargo clippy -D warnings`, a curl run against the real binary, `nix build`, and for M3 `svelte-check` plus the Playwright suite in `web/e2e`.
 
 **M0, skeleton: done.** MIT `LICENSE`, `Cargo.toml`, flake (`packages`, `overlays`, `devShells`, `apps` for `nix run`, `formatter`, `checks`), `.github/workflows/ci.yml` (Rust, web with a 150 kB JS budget, Nix), Svelte 5 + Vite shell embedded with `rust-embed`, and a `build.rs` that creates `web/dist` so a plain `cargo build` works before the UI has been built.
 
@@ -924,6 +924,15 @@ Built in this order, and verified by `cargo test` (42 unit tests and 53 integrat
 - **Contract tests** (`tests/contract.rs`) check the spec in both directions: every documented operation is routed and answers with a documented status, and real responses validate against the schemas in `api/openapi.yaml`. They found one missing documented status while being written.
 - **Write transactions use `BEGIN IMMEDIATE`** (`db::begin_write`). SQLite's default deferred `BEGIN` fails a transaction that reads before it writes with `SQLITE_BUSY_SNAPSHOT` when another connection commits in between, and `busy_timeout` does not apply. A concurrency test (48 parallel edits) failed about 96% of the time before the change, and the M1 ingest path had the same exposure.
 - Not done in M2: `page_url` and the on-demand `gif`/`webm`/`webp` entries of the GIF object (M5), `gif.ready` for failed items, pre-migration snapshots (M6).
+
+**M3, web UI: done**, with these departures from the text above:
+
+- **Scope.** Login, Library (search with chips, hashtag sidebar), Unsorted, the tag sheet with every key in 9.4, upload by button / drag / paste (file or link), and a detail view with Edit hashtags, Copy, Delete (with Undo). Hashtag management, Trash, batch select, live updates over SSE and the API-key screen stay in M7; the gestures, PWA manifest and share target stay in M4. A basic responsive layout (icon rail, bottom tab bar, full-screen sheet) came along because the CSS was cheap, but it is not yet tested on a phone viewport.
+- **Stack as planned:** Svelte 5 runes, no router or UI library (a 40-line path router; `?gif=<id>` opens the detail overlay on top of the current list), `thumbhash` for placeholders. The initial JavaScript is about 31 kB gzipped against the 150 kB budget.
+- **Grid.** A JS masonry placed from stored dimensions (no layout shift) that only renders tiles near the viewport; each tile plays `preview.mp4` only while on screen. Processing items are re-fetched every 1.5 s until ready, instead of waiting for the SSE stream.
+- **Tag sheet.** Saving is optimistic and "Same as last" / Recent update at once, not after the round trip. Shortcuts listen on `window` so they survive focus landing on the backdrop; `Esc` stops propagation so closing the sheet does not also close the detail view under it. Space and comma commit a chip from the `input` event (not `keydown`), so mobile keyboards work. When an arrow key has highlighted a suggestion, `Enter` accepts it as a chip and a second `Enter` saves; otherwise `Enter` commits the typed text and saves. The position shown ("3 of 41") counts the run, so it does not drift as GIFs leave the queue.
+- **CSRF.** The first e2e run found that a body-less `DELETE` was rejected: cookie writes need JSON or `X-Unigif-Request`. The client now sends that header on every call.
+- **Tests.** `web/e2e` starts the real binary against a throwaway data directory with ffmpeg-made fixtures (`node e2e/serve.mjs`) and covers: upload three GIFs and sort them with the keyboard only, search, wrong password, suggestions / Backspace / Shift+Enter, and edit + delete + undo from the detail view. CI has a new `e2e` job.
 
 M0 to M6 are the "storage accessor" you asked for first. Packaging is kept working from M0 onward; M6 finishes and hardens it rather than starting it.
 
