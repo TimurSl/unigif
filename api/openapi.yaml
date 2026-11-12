@@ -629,7 +629,7 @@ paths:
       tags: [system]
       summary: Server-sent events
       description: |
-        `gif.added`, `gif.ready`, `gif.tagged`, `gif.deleted`; each `data` is `{"id": "…"}`. A subscriber that falls
+        `gif.added`, `gif.ready`, `gif.failed` (processing gave up), `gif.tagged`, `gif.deleted`; each `data` is `{"id": "…"}`. A subscriber that falls
         behind receives `resync` and should reload. Events about GIFs the key cannot see are not sent.
       x-scope: read
       responses:

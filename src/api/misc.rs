@@ -45,7 +45,7 @@ pub async fn clear_cache(State(app): State<App>, Auth(p): Auth) -> Result<Json<V
     Ok(Json(json!({ "files": files, "bytes": bytes })))
 }
 
-/// Server-sent events: `gif.added`, `gif.ready`, `gif.tagged`, `gif.deleted`,
+/// Server-sent events: `gif.added`, `gif.ready`, `gif.failed`, `gif.tagged`, `gif.deleted`,
 /// each carrying `{"id": …}`. A subscriber that falls behind gets a `resync`
 /// event and should reload. Events about GIFs the key cannot see are dropped.
 pub async fn events(

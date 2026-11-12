@@ -148,6 +148,7 @@ async fn execute(app: &App, job: Job) -> Result<()> {
                     .execute(&app.db)
                     .await?;
                 let _ = tokio::fs::remove_file(source_path(&app.cfg, &gif_id)).await;
+                app.emit("gif.failed", &gif_id);
             } else {
                 let backoff = Duration::from_secs(5 * (1u64 << job.attempts.min(6)));
                 sqlx::query("UPDATE jobs SET state = 'queued', error = ?, run_after = ? WHERE id = ?")

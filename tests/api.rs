@@ -522,3 +522,41 @@ async fn concurrent_edits_all_succeed() {
         );
     }
 }
+
+#[tokio::test]
+async fn a_gif_that_gives_up_processing_sends_gif_failed() {
+    let h = Harness::new().await;
+    let g = h.add_gif(1, "").await;
+    let id = g["id"].as_str().unwrap().to_string();
+    let resp = h.send(h.req("GET", "/api/v1/events", Some(&h.token), None)).await;
+    let mut body = resp.into_body();
+
+    // Put it back in the queue on its last attempt, with its source gone.
+    sqlx::query("UPDATE gifs SET status = 'processing' WHERE id = ?")
+        .bind(&id)
+        .execute(&h.app.db)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE jobs SET state = 'queued', attempts = 2, run_after = 0 WHERE gif_id = ?")
+        .bind(&id)
+        .execute(&h.app.db)
+        .await
+        .unwrap();
+    h.app.jobs.notify_waiters();
+
+    let mut text = String::new();
+    while !text.contains("\n\n") {
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(20), body.frame())
+            .await
+            .expect("timed out waiting for gif.failed")
+            .expect("stream ended")
+            .unwrap();
+        if let Some(d) = frame.data_ref() {
+            text.push_str(&String::from_utf8_lossy(d));
+        }
+    }
+    assert!(text.starts_with("event: gif.failed\n"), "{text}");
+    assert!(text.contains(&format!("data: {{\"id\":\"{id}\"}}")));
+    let (_, v) = h.call("GET", &format!("/api/v1/gifs/{id}"), None).await;
+    assert_eq!(v["status"], "failed");
+}

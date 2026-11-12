@@ -140,6 +140,64 @@ async fn mp4_with_audio_is_stripped_and_large_video_is_downscaled() {
     assert_eq!(video_stream(&p)["height"], 404);
 }
 
+/// An H.264 MP4 that is only re-encoded because of its audio track: a packet
+/// copy is made too, and whichever is smaller is kept.
+async fn add_h264_with_audio(h: &Harness, name: &str, crf: &str) -> (u64, std::path::PathBuf) {
+    let mp4 = h.dir.path().join(name);
+    ffmpeg(&[
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=320x240:rate=15:duration=2",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=duration=2",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-preset",
+        "veryslow",
+        "-crf",
+        crf,
+        "-c:a",
+        "aac",
+        "-shortest",
+        mp4.to_str().unwrap(),
+    ]);
+    let (status, v) = h.add("?wait=60", std::fs::read(&mp4).unwrap()).await;
+    assert_eq!(status, StatusCode::CREATED, "{v}");
+    assert_eq!(v["status"], "ready", "{v}");
+    let full = media_path(h, v["id"].as_str().unwrap(), "full.mp4");
+    let video_bytes = video_stream(&probe(&mp4))["bit_rate"].as_str().unwrap().parse::<u64>().unwrap();
+    (video_bytes, full)
+}
+
+#[tokio::test]
+async fn a_video_keeps_its_own_packets_when_they_are_smaller_than_the_re_encode() {
+    // A tightly compressed source (veryslow, CRF 40) beats the CRF 23 re-encode.
+    let h = Harness::new().await;
+    let (src_rate, full) = add_h264_with_audio(&h, "tight.mp4", "40").await;
+    let p = probe(&full);
+    assert!(p["streams"].as_array().unwrap().iter().all(|s| s["codec_type"] != "audio"), "audio is dropped");
+    let out_rate = video_stream(&p)["bit_rate"].as_str().unwrap().parse::<u64>().unwrap();
+    // Same packets: the bitrate matches the source's video stream (within container rounding).
+    assert!(out_rate.abs_diff(src_rate) * 20 < src_rate, "source {src_rate} b/s, stored {out_rate} b/s");
+    assert!(!full.with_file_name("full.copy.mp4").exists());
+}
+
+#[tokio::test]
+async fn a_video_is_re_encoded_when_that_is_smaller() {
+    // A lossless source (CRF 0) is far larger than the re-encode.
+    let h = Harness::new().await;
+    let (src_rate, full) = add_h264_with_audio(&h, "loose.mp4", "0").await;
+    let out_rate = video_stream(&probe(&full))["bit_rate"].as_str().unwrap().parse::<u64>().unwrap();
+    // Clearly not the same packets (those would match within a few per cent).
+    assert!(out_rate * 20 < src_rate * 19, "source {src_rate} b/s, stored {out_rate} b/s");
+    assert!(!full.with_file_name("full.copy.mp4").exists());
+}
+
 #[tokio::test]
 async fn odd_dimensions_become_even() {
     let h = Harness::new().await;

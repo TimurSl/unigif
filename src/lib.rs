@@ -9,6 +9,7 @@ pub mod config;
 pub mod db;
 pub mod doctor;
 pub mod error;
+pub mod export;
 pub mod fetch;
 pub mod import;
 pub mod ingest;

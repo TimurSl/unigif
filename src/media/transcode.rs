@@ -40,13 +40,27 @@ pub struct FileInfo {
 /// True for H.264 / yuv420p / silent / within the size limit, which is
 /// every Telegram GIF.
 pub fn can_remux(info: &ProbeInfo, cfg: &MediaConfig) -> bool {
+    can_copy(info, cfg) && !info.has_audio && info.fps <= cfg.max_fps as f64 + 0.5
+}
+
+/// Would a packet copy (audio dropped) be a valid `full.mp4`? The long edge
+/// is a hard limit; the frame-rate cap and the audio rule are not. Such a
+/// source is re-encoded first, but if that turns out larger than a copy of
+/// its packets, the copy is kept instead.
+pub fn can_copy(info: &ProbeInfo, cfg: &MediaConfig) -> bool {
     info.codec == "h264"
         && info.pix_fmt == "yuv420p"
-        && !info.has_audio
-        && info.width.max(info.height) <= cfg.long_edge
         && info.width % 2 == 0
         && info.height % 2 == 0
-        && info.fps <= cfg.max_fps as f64 + 0.5
+        && info.width.max(info.height) <= cfg.long_edge
+}
+
+async fn remux(ff: &Ffmpeg, src: &Path, kind: SourceKind, out: &Path, timeout: Duration) -> Result<()> {
+    let mut a = args!["-an"];
+    a.extend(input(src, kind.demuxer()));
+    a.extend(args!["-c", "copy", "-movflags", "+faststart", "-f", "mp4", out]);
+    ff.run(a, timeout).await?;
+    Ok(())
 }
 
 /// Does any pixel of the source actually use transparency?
@@ -88,14 +102,14 @@ pub async fn process(
     let has_alpha = detect_alpha(ff, src, kind, &info).await.context("detecting transparency")?;
 
     let full_path = out_dir.join("full.mp4");
-    let remuxed = !has_alpha && can_remux(&info, cfg);
+    let mut remuxed = !has_alpha && can_remux(&info, cfg);
     if remuxed {
-        let mut a = args!["-an"];
-        a.extend(input(src, kind.demuxer()));
-        a.extend(args!["-c", "copy", "-movflags", "+faststart", "-f", "mp4", &full_path]);
-        ff.run(a, timeout).await.context("remuxing")?;
+        remux(ff, src, kind, &full_path, timeout).await.context("remuxing")?;
     } else {
         encode_full(ff, cfg, src, kind, &info, has_alpha, &full_path, timeout).await.context("encoding")?;
+        if !has_alpha && can_copy(&info, cfg) {
+            remuxed = keep_smaller_copy(ff, src, kind, &full_path, timeout).await;
+        }
     }
 
     let full_info = verify_full(ff, &full_path).await?;
@@ -150,6 +164,37 @@ pub async fn process(
         phash,
         remuxed,
     })
+}
+
+/// The source is already H.264 but was re-encoded (for audio, size or frame
+/// rate). Copy its packets too and keep the copy when it is smaller. Any
+/// failure keeps the re-encode. Returns whether the copy was kept.
+async fn keep_smaller_copy(
+    ff: &Ffmpeg,
+    src: &Path,
+    kind: SourceKind,
+    full: &Path,
+    timeout: Duration,
+) -> bool {
+    let copy = full.with_file_name("full.copy.mp4");
+    let kept = async {
+        remux(ff, src, kind, &copy, timeout).await?;
+        verify_full(ff, &copy).await?;
+        let (enc, cp) = (std::fs::metadata(full)?.len(), std::fs::metadata(&copy)?.len());
+        if cp < enc {
+            tokio::fs::rename(&copy, full).await?;
+            tracing::debug!(reencoded = enc, copied = cp, "kept the smaller packet copy");
+            return Ok::<_, anyhow::Error>(true);
+        }
+        Ok(false)
+    }
+    .await
+    .unwrap_or_else(|e| {
+        tracing::debug!(error = ?e, "packet copy not usable; keeping the re-encode");
+        false
+    });
+    let _ = tokio::fs::remove_file(&copy).await;
+    kept
 }
 
 #[allow(clippy::too_many_arguments)]
