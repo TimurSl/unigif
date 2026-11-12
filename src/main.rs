@@ -11,7 +11,7 @@ use unigif::auth::{accounts, Scopes};
 use unigif::config::Config;
 use unigif::db::{keys as key_db, now_ms, users};
 use unigif::ingest::worker;
-use unigif::{api, db, doctor, import, janitor, tags};
+use unigif::{api, backup, db, doctor, import, janitor, tags};
 
 #[derive(Parser)]
 #[command(name = "unigif", version, about = "Self-hosted, hashtag-first GIF library")]
@@ -35,6 +35,15 @@ enum Command {
     /// Manage API keys.
     #[command(subcommand)]
     Key(KeyCommand),
+    /// Write a consistent snapshot of the database (safe while the server runs).
+    Backup {
+        /// Where to write it (default: <dataDir>/backups).
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// How many snapshots to keep; older ones are deleted.
+        #[arg(long, default_value_t = 7)]
+        keep: usize,
+    },
     /// Bulk-import a folder of GIFs and videos.
     Import {
         dir: PathBuf,
@@ -190,6 +199,17 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                     }
                 }
             }
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Backup { dir, keep } => {
+            // Straight to the database: no directories, owner or recovery work.
+            if !cfg.db_path().exists() {
+                anyhow::bail!("there is no database at {}", cfg.db_path().display());
+            }
+            let db = db::open(&cfg.db_path()).await?;
+            let dir = dir.unwrap_or_else(|| backup::default_dir(&cfg.data_dir));
+            let dest = backup::run(&db, &dir, keep).await?;
+            println!("{}", dest.display());
             Ok(ExitCode::SUCCESS)
         }
         Command::Import { dir, tags_from_folders } => {
