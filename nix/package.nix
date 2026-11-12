@@ -50,6 +50,7 @@ rustPlatform.buildRustPackage {
       ../rustfmt.toml
       ../LICENSE
       ../src
+      ../api
       ../migrations
       ../tests
     ];

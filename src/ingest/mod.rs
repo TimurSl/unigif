@@ -65,8 +65,17 @@ pub struct Added {
     pub duplicate: bool,
 }
 
-/// Stream a body into `tmp/`, hashing it and enforcing the size cap.
-pub async fn receive<S, E>(app: &App, mut body: S) -> Result<Upload, ApiError>
+/// Stream a request body into `tmp/`, hashing it and enforcing the size cap.
+pub async fn receive<S, E>(app: &App, body: S) -> Result<Upload, ApiError>
+where
+    S: Stream<Item = Result<Bytes, E>> + Unpin,
+    E: std::fmt::Display,
+{
+    receive_labeled(app, body, "request body").await
+}
+
+/// [`receive`], naming what is being read in error messages.
+pub async fn receive_labeled<S, E>(app: &App, mut body: S, what: &str) -> Result<Upload, ApiError>
 where
     S: Stream<Item = Result<Bytes, E>> + Unpin,
     E: std::fmt::Display,
@@ -81,7 +90,7 @@ where
     let mut hasher = Sha256::new();
     let mut size = 0u64;
     while let Some(chunk) = body.next().await {
-        let chunk = chunk.map_err(|e| ApiError::BadRequest(format!("reading request body: {e}")))?;
+        let chunk = chunk.map_err(|e| ApiError::BadRequest(format!("reading {what}: {e}")))?;
         size += chunk.len() as u64;
         if size > limit {
             return Err(ApiError::TooLarge { limit });
@@ -155,6 +164,7 @@ pub async fn add(app: &App, upload: Upload, mut req: AddRequest) -> Result<Added
         }
     }
     app.jobs.notify_one();
+    app.emit("gif.added", &id);
 
     // 5. Optionally wait for the worker so most callers get a finished item.
     let deadline = Instant::now() + req.wait;
@@ -186,19 +196,22 @@ async fn find_existing(app: &App, up: &Upload, req: &AddRequest) -> Result<Optio
 }
 
 async fn merge_duplicate(app: &App, existing: GifRow, req: &AddRequest) -> Result<Added, ApiError> {
-    let mut tx = app.db.begin().await?;
+    let mut tx = crate::db::begin_write(&app.db).await?;
     let now = now_ms();
-    if existing.deleted_at.is_some() {
-        sqlx::query("UPDATE gifs SET deleted_at = NULL WHERE id = ?")
-            .bind(&existing.id)
-            .execute(&mut *tx)
-            .await?;
-    }
-    tags::add_tags(&mut tx, &existing.id, &req.tags, now).await.map_err(|e| match e {
+    // Uploading a trashed GIF again brings it back (restoring also puts its
+    // hashtags back into the tag counts).
+    let restored = existing.deleted_at.is_some() && gifs::restore(&mut tx, &existing.id).await?;
+    let added_tags = tags::add_tags(&mut tx, &existing.id, &req.tags, now).await.map_err(|e| match e {
         tags::AddTagsError::Tag(t) => ApiError::BadRequest(t.to_string()),
         tags::AddTagsError::Db(d) => d.into(),
     })?;
     tx.commit().await?;
+    if restored {
+        app.emit("gif.added", &existing.id);
+    }
+    if added_tags > 0 {
+        app.emit("gif.tagged", &existing.id);
+    }
     let gif = gifs::get(&app.db, &existing.id).await?.ok_or_else(|| anyhow::anyhow!("row vanished"))?;
     Ok(Added { gif, duplicate: true })
 }
@@ -211,7 +224,7 @@ async fn insert(
     req: &AddRequest,
 ) -> Result<(), sqlx::Error> {
     let now = now_ms();
-    let mut tx = app.db.begin().await?;
+    let mut tx = crate::db::begin_write(&app.db).await?;
     sqlx::query(
         "INSERT INTO gifs (id, status, sha256, original_mime, bytes_original, description,
                            source, source_id, source_url, added_by_key, created_at)

@@ -105,3 +105,26 @@ mod tests {
         assert_eq!(rfc3339(1_783_848_600_000), "2026-07-12T09:30:00Z");
     }
 }
+
+impl GifObject {
+    /// Show only the hashtags in `allowed` and no media: what a credential
+    /// that may not look at this GIF gets back when its upload turns out to be
+    /// a duplicate of something it cannot see.
+    pub fn redact(&mut self, allowed: &[String]) {
+        self.tags.retain(|t| allowed.contains(t));
+        self.media = None;
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct Page<T> {
+    pub items: Vec<T>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TagObject {
+    pub name: String,
+    pub gif_count: i64,
+    pub last_used_at: Option<String>,
+}

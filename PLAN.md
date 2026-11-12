@@ -2,7 +2,7 @@
 
 A self-hosted, hashtag-first GIF library with a scoped-key API, MP4-based storage, a keyboard-driven sorting flow, a mobile UI, and first-class NixOS packaging. Built so that Telegram clients, bots, and your own social network can use it as a GIF provider.
 
-Status: **M0 and M1 are implemented** (see section 13 for what that covers and where the code departs from this text). Stack, media visibility, tenancy, originals policy, and licence are confirmed by the owner (section 14). Items marked **(verify)** are facts I could not fully confirm during research and must be checked when that part is built.
+Status: **M0, M1 and M2 are implemented** (see section 13 for what that covers and where the code departs from this text). Stack, media visibility, tenancy, originals policy, and licence are confirmed by the owner (section 14). Items marked **(verify)** are facts I could not fully confirm during research and must be checked when that part is built.
 
 ---
 
@@ -886,31 +886,44 @@ Sizes are relative (S / M / L), not time estimates.
 |---|---|---|---|
 | M0 ✅ | **Skeleton**: MIT `LICENSE`, flake, dev shell, CI, Rust server serving an embedded empty SPA, `nix build` and `nix run` work | S | A fresh clone builds and starts with one command |
 | M1 ✅ | **Storage core**: schema, migrations, ingest pipeline, stored variants, dedupe, media serving, `import` and `doctor` | L | `curl` quick add of a GIF yields `full.mp4`, `preview.mp4`, `poster.webp`; Range requests work; the same file twice returns `duplicate` |
-| M2 | **Auth and API**: login, sessions, API keys with scopes and `deny_tags`, rate limits, all section 8 endpoints, OpenAPI served | L | Contract tests pass against `openapi.yaml`; a `read` key gets `403` on upload |
+| M2 ✅ | **Auth and API**: login, sessions, API keys with scopes and `deny_tags`, rate limits, all section 8 endpoints, OpenAPI served | L | Contract tests pass against `openapi.yaml`; a `read` key gets `403` on upload |
 | M3 | **Web UI**: login, Library, search, Unsorted, tag sheet with every key in 9.4, upload by drag and paste, detail view | L | An end-to-end test sorts three GIFs using only the keyboard |
 | M4 | **Mobile and PWA**: responsive layout, bottom bar, full-screen tag sheet, gestures, installable, Android share target | M | The same sorting test passes in a phone viewport; a shared GIF lands in Unsorted |
 | M5 | **Conversion**: on-demand GIF / WebM / WebP, cache with eviction, share page with OpenGraph, storage stats | M | `full.gif` is generated once and served from cache after; the cache stays under its limit |
 | M6 | **NixOS**: module, hardening, nginx integration, backup timer, VM test, deployment guide | M | The VM test in 10.4 passes; the service runs on the VPS |
 | M7 | **Polish**: hashtag management (rename, merge), trash, batch select, co-occurrence suggestions, live updates over SSE, API key screen refinements | M | Renaming or merging a hashtag updates every GIF; a GIF added through the API appears in an open Unsorted tab without a reload |
 
-### 13.1 Implementation notes (M0 and M1)
+### 13.1 Implementation notes (M0 to M2)
 
-Built in this order, and verified by `cargo test` (27 unit and 21 integration tests with real ffmpeg), `cargo clippy -D warnings`, a curl run against the real binary, and `nix build`.
+Built in this order, and verified by `cargo test` (42 unit tests and 53 integration tests, with real ffmpeg), `cargo clippy -D warnings`, a curl run against the real binary, and `nix build`.
 
 **M0, skeleton: done.** MIT `LICENSE`, `Cargo.toml`, flake (`packages`, `overlays`, `devShells`, `apps` for `nix run`, `formatter`, `checks`), `.github/workflows/ci.yml` (Rust, web with a 150 kB JS budget, Nix), Svelte 5 + Vite shell embedded with `rust-embed`, and a `build.rs` that creates `web/dist` so a plain `cargo build` works before the UI has been built.
 
 **M1, storage core: done**, with these departures from the text above:
 
-- **Interim auth.** The M1 endpoints are guarded by one static bearer token (`auth.bootstrapToken`); with none configured every `/api/v1` request is refused. M2 replaces it with sessions and scoped keys.
-- **Quick add by URL (`{"url": …}`) is not in M1.** It returns `501 not_implemented`. The SSRF-safe fetcher lands with the M2 API work, because it is security-sensitive and wants the key and rate-limit machinery around it.
+- **Interim auth** (M1 only): one static bearer token. Replaced in M2; see below.
+- **Quick add by URL** returned `501` in M1; it landed with M2.
 - **On-demand variants** (`full.gif`, `full.webm`, …) and `/g/{id}` are M5; those names answer `404` until then, and the GIF object only lists the three stored variants.
-- **`GET /api/v1/gifs/{id}`** exists so quick add can be verified; list, search and the rest of section 8.3 are M2.
 - **Pre-decode checks** are three, not two: ffprobe limits (dimensions, duration, frame count), then a first-frame decode. `ffprobe` reads headers only, so a file with a plausible header and garbage inside would otherwise pass and fail later in the worker.
 - **Forced demuxers.** For GIF, MP4/MOV and Matroska/WebM the sniffed type picks ffmpeg's demuxer with `-f`, so a crafted file cannot select an exotic one (playlists, concat scripts).
 - **Alpha detection** looks at the alpha plane (`alphaextract` + `signalstats`), because ffmpeg decodes every GIF as `bgra` whether or not it has transparency.
 - **Sources of unfinished jobs** live in `work/`, not `tmp/` (which is wiped at start), so a restart resumes them. A failed item is dropped and replaced when the same bytes are uploaded again.
 - **Animated WebP input** depends on the ffmpeg build: ffmpeg 6.x decodes only the first frame, newer releases decode the animation. `doctor` does not check this yet.
 - Deferred to later milestones: pre-migration DB snapshots (M6), the "keep the smaller of re-encode and original" rule for video sources (M7 polish), `export`, `gc`, `user` and `key` subcommands.
+
+**M2, auth and API: done**, with these departures from the text above:
+
+- **No bootstrap token any more.** The first owner comes from `unigif user add <name>` or from `auth.initialOwner` (`username` + `passwordFile`, used only while the users table is empty). `unigif key create` mints keys without a browser; it also has `key list` and `key revoke`.
+- **One authentication middleware.** `auth::middleware` resolves a bearer key or a session cookie, applies the CSRF rules and the rate limit, and attaches a `Principal`; handlers call `principal.require(scope)`. A malformed `Authorization` header is `401` rather than "anonymous"; a stale cookie is just anonymous. Keys in a query string (`api_key=…`, or any value starting `ugf_`) are `400`.
+- **Rate limits** are an in-memory token bucket per (key, class): `read` for everything and `upload` for `POST /gifs`; a key's own `rate_limit` replaces both defaults. The owner's session is not limited. Failed logins are throttled per client IP (5 failures a minute, then a lock-out of 1, 2, 4 … minutes up to an hour, cleared by a success). Client IP comes from the TCP peer, or from `X-Forwarded-For` only when the peer is in `auth.trustedProxies`.
+- **CSRF:** a cookie-authenticated write must be `application/json` or carry `X-Unigif-Request`, and an `Origin` header, when present, must match `Host` or `publicUrl`. CORS never allows credentials, so cookies cannot ride a cross-origin request; keys can, from `cors.origins`.
+- **Hidden hashtags (`deny_tags`)** are one SQL fragment (`Visibility`) added to every query that returns or touches GIFs, so by-ID lookups, tag counts, stats, the unsorted queue and the event stream all honour it. A key with hidden hashtags may not use them when tagging or uploading, and may not rename, merge or delete hashtags library-wide (those reach GIFs it cannot see). A duplicate upload that matches a GIF the key cannot see returns only the tags the key sent and no media; the same goes for an uploader key without `read`.
+- **Trash keeps hashtags attached** but removes the GIF from `tags.gif_count`; restoring (including by uploading the same bytes again) puts it back. Tag rows are deleted as soon as no GIF, trashed or not, carries them (there is no separate janitor for that). `sorted_at` is cleared when a GIF loses its last hashtag, so `sorted_at: null` always means unsorted. The hourly janitor purges trash older than `trash.retentionDays` (files included) and expired sessions.
+- **URL fetch** uses its own DNS resolver that drops private, loopback, link-local, CGNAT, documentation and reserved addresses (v4 and v6, including v4-mapped, NAT64 and 6to4), checks literal-IP hosts up front, follows at most 3 redirects by hand and re-validates each hop, ignores proxy environment variables, refuses credentials in URLs, and applies the size cap while streaming plus a total deadline. `fetch.allowPrivate` exists for tests only.
+- **Additions beyond the 8.3 table**, needed by the web UI in M3: `POST /auth/password`, `GET /auth/sessions`, `DELETE /auth/sessions/{id}`, `PATCH /me` (owner preferences such as `proceed_to_next`), `GET /gifs?trash=true` (needs the `delete` scope), `?status=` and `?include_revoked=`. `GET /gifs/unsorted/next` returns `{item, remaining, total}`; `after` only marks a position, so the GIF just sorted can be passed.
+- **Contract tests** (`tests/contract.rs`) check the spec in both directions: every documented operation is routed and answers with a documented status, and real responses validate against the schemas in `api/openapi.yaml`. They found one missing documented status while being written.
+- **Write transactions use `BEGIN IMMEDIATE`** (`db::begin_write`). SQLite's default deferred `BEGIN` fails a transaction that reads before it writes with `SQLITE_BUSY_SNAPSHOT` when another connection commits in between, and `busy_timeout` does not apply. A concurrency test (48 parallel edits) failed about 96% of the time before the change, and the M1 ingest path had the same exposure.
+- Not done in M2: `page_url` and the on-demand `gif`/`webm`/`webp` entries of the GIF object (M5), `gif.ready` for failed items, pre-migration snapshots (M6).
 
 M0 to M6 are the "storage accessor" you asked for first. Packaging is kept working from M0 onward; M6 finishes and hardens it rather than starting it.
 

@@ -74,6 +74,10 @@ pub struct Config {
     pub upload: UploadConfig,
     pub media: MediaConfig,
     pub auth: AuthConfig,
+    pub rate_limit: RateLimitConfig,
+    pub cors: CorsConfig,
+    pub fetch: FetchConfig,
+    pub trash: TrashConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,12 +114,86 @@ pub struct MediaConfig {
     pub ffprobe: String,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AuthConfig {
-    /// Interim static bearer token used until API keys land (milestone M2).
-    /// Without it every `/api/v1` request is refused.
-    pub bootstrap_token: Option<String>,
+    /// Creates the first user at start-up when the users table is empty.
+    pub initial_owner: InitialOwner,
+    /// Session lifetime; every use inside the window extends it.
+    pub session_days: u32,
+    /// Proxies whose `X-Forwarded-For` is believed (exact IP addresses).
+    pub trusted_proxies: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct InitialOwner {
+    pub username: Option<String>,
+    /// File holding the password (first line, trailing newline stripped).
+    pub password_file: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RateLimitConfig {
+    /// Requests per minute per key for everything except uploads.
+    pub read_per_min: u32,
+    /// Requests per minute per key for `POST /gifs`.
+    pub upload_per_min: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CorsConfig {
+    /// Origins allowed to call the API from a browser; `*` allows any.
+    /// Cookies are never sent cross-origin whatever this says.
+    pub origins: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FetchConfig {
+    /// Allow quick add by URL to reach private, loopback and link-local
+    /// addresses. Off in production; the test suite turns it on.
+    pub allow_private: bool,
+    pub timeout_secs: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TrashConfig {
+    /// Days a trashed GIF is kept before its files are deleted.
+    pub retention_days: u32,
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self { initial_owner: InitialOwner::default(), session_days: 30, trusted_proxies: vec![] }
+    }
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self { read_per_min: 120, upload_per_min: 30 }
+    }
+}
+
+impl Default for CorsConfig {
+    fn default() -> Self {
+        Self { origins: vec!["*".into()] }
+    }
+}
+
+impl Default for FetchConfig {
+    fn default() -> Self {
+        Self { allow_private: false, timeout_secs: 30 }
+    }
+}
+
+impl Default for TrashConfig {
+    fn default() -> Self {
+        Self { retention_days: 30 }
+    }
 }
 
 impl Default for Config {
@@ -128,6 +206,10 @@ impl Default for Config {
             upload: UploadConfig::default(),
             media: MediaConfig::default(),
             auth: AuthConfig::default(),
+            rate_limit: RateLimitConfig::default(),
+            cors: CorsConfig::default(),
+            fetch: FetchConfig::default(),
+            trash: TrashConfig::default(),
         }
     }
 }
@@ -187,6 +269,17 @@ impl Config {
         }
         if self.media.long_edge < 16 || self.media.preview_height < 16 {
             bail!("media.longEdge and media.previewHeight must be at least 16");
+        }
+        if self.auth.session_days == 0 {
+            bail!("auth.sessionDays must be at least 1");
+        }
+        if self.rate_limit.read_per_min == 0 || self.rate_limit.upload_per_min == 0 {
+            bail!("rateLimit values must be at least 1");
+        }
+        for p in &self.auth.trusted_proxies {
+            if p.parse::<std::net::IpAddr>().is_err() {
+                bail!("auth.trustedProxies entry {p:?} is not an IP address");
+            }
         }
         Ok(())
     }
@@ -265,13 +358,13 @@ mod tests {
         std::env::set_var("UNIGIF_DATA_DIR", "/srv/unigif");
         std::env::set_var("UNIGIF_UPLOAD__MAX_SIZE", "20MiB");
         std::env::set_var("UNIGIF_MEDIA__KEEP_ORIGINALS", "always");
-        std::env::set_var("UNIGIF_AUTH__BOOTSTRAP_TOKEN", "tok");
+        std::env::set_var("UNIGIF_AUTH__SESSION_DAYS", "7");
         let cfg = Config::load(None);
         for k in [
             "UNIGIF_DATA_DIR",
             "UNIGIF_UPLOAD__MAX_SIZE",
             "UNIGIF_MEDIA__KEEP_ORIGINALS",
-            "UNIGIF_AUTH__BOOTSTRAP_TOKEN",
+            "UNIGIF_AUTH__SESSION_DAYS",
         ] {
             std::env::remove_var(k);
         }
@@ -279,7 +372,7 @@ mod tests {
         assert_eq!(cfg.data_dir, PathBuf::from("/srv/unigif"));
         assert_eq!(cfg.upload.max_size.0, 20 * 1024 * 1024);
         assert_eq!(cfg.media.keep_originals, KeepOriginals::Always);
-        assert_eq!(cfg.auth.bootstrap_token.as_deref(), Some("tok"));
+        assert_eq!(cfg.auth.session_days, 7);
     }
 
     #[test]

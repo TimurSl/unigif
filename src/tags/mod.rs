@@ -111,6 +111,202 @@ pub async fn add_tags(
     Ok(added)
 }
 
+/// Remove tags from a (non-trashed) GIF. Returns how many were detached.
+/// A GIF left without hashtags goes back to Unsorted (`sorted_at` cleared).
+pub async fn remove_tags(
+    tx: &mut Transaction<'_, Sqlite>,
+    gif_id: &str,
+    names: &[String],
+) -> Result<usize, sqlx::Error> {
+    let mut removed = 0usize;
+    let mut touched = Vec::new();
+    for name in names {
+        let Some(tag_id) = sqlx::query_scalar::<_, i64>("SELECT id FROM tags WHERE name = ?")
+            .bind(name)
+            .fetch_optional(&mut **tx)
+            .await?
+        else {
+            continue;
+        };
+        let res = sqlx::query("DELETE FROM gif_tags WHERE gif_id = ? AND tag_id = ?")
+            .bind(gif_id)
+            .bind(tag_id)
+            .execute(&mut **tx)
+            .await?;
+        if res.rows_affected() == 1 {
+            sqlx::query("UPDATE tags SET gif_count = gif_count - 1 WHERE id = ?")
+                .bind(tag_id)
+                .execute(&mut **tx)
+                .await?;
+            removed += 1;
+            touched.push(tag_id);
+        }
+    }
+    if removed > 0 {
+        sqlx::query(
+            "UPDATE gifs SET tag_count = tag_count - ?,
+                    sorted_at = CASE WHEN tag_count - ? = 0 THEN NULL ELSE sorted_at END
+             WHERE id = ?",
+        )
+        .bind(removed as i64)
+        .bind(removed as i64)
+        .bind(gif_id)
+        .execute(&mut **tx)
+        .await?;
+        for id in touched {
+            drop_if_orphaned(tx, id).await?;
+        }
+    }
+    Ok(removed)
+}
+
+/// Make the GIF's hashtags exactly `names`.
+pub async fn replace_tags(
+    tx: &mut Transaction<'_, Sqlite>,
+    gif_id: &str,
+    names: &[String],
+    now: i64,
+) -> Result<(), AddTagsError> {
+    let current: Vec<String> = sqlx::query_scalar(
+        "SELECT t.name FROM gif_tags gt JOIN tags t ON t.id = gt.tag_id WHERE gt.gif_id = ?",
+    )
+    .bind(gif_id)
+    .fetch_all(&mut **tx)
+    .await?;
+    let stale: Vec<String> = current.iter().filter(|c| !names.contains(c)).cloned().collect();
+    remove_tags(tx, gif_id, &stale).await?;
+    add_tags(tx, gif_id, names, now).await?;
+    Ok(())
+}
+
+/// A tag nobody carries (not even a trashed GIF) has no reason to exist.
+async fn drop_if_orphaned(tx: &mut Transaction<'_, Sqlite>, tag_id: i64) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM tags WHERE id = ? AND NOT EXISTS (SELECT 1 FROM gif_tags WHERE tag_id = ?)")
+        .bind(tag_id)
+        .bind(tag_id)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+/// Recompute `gif_count` (live GIFs only) from the join table.
+async fn recount_tag(tx: &mut Transaction<'_, Sqlite>, tag_id: i64) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE tags SET gif_count = (SELECT COUNT(*) FROM gif_tags gt JOIN gifs g ON g.id = gt.gif_id
+                                      WHERE gt.tag_id = tags.id AND g.deleted_at IS NULL)
+         WHERE id = ?",
+    )
+    .bind(tag_id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Recompute `tag_count` and `sorted_at` for GIFs whose tag set changed under them.
+async fn recount_gifs(
+    tx: &mut Transaction<'_, Sqlite>,
+    gif_ids: &[String],
+    now: i64,
+) -> Result<(), sqlx::Error> {
+    for id in gif_ids {
+        sqlx::query(
+            "UPDATE gifs SET tag_count = (SELECT COUNT(*) FROM gif_tags WHERE gif_id = gifs.id)
+             WHERE id = ?",
+        )
+        .bind(id)
+        .execute(&mut **tx)
+        .await?;
+        sqlx::query(
+            "UPDATE gifs SET sorted_at = CASE WHEN tag_count = 0 THEN NULL ELSE COALESCE(sorted_at, ?) END
+             WHERE id = ?",
+        )
+        .bind(now)
+        .bind(id)
+        .execute(&mut **tx)
+        .await?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum TagOpError {
+    #[error("no such hashtag")]
+    NotFound,
+    #[error("a hashtag with that name already exists; merge instead")]
+    Exists,
+    #[error(transparent)]
+    Invalid(#[from] TagError),
+    #[error(transparent)]
+    Db(#[from] sqlx::Error),
+}
+
+async fn tag_id(tx: &mut Transaction<'_, Sqlite>, name: &str) -> Result<Option<i64>, sqlx::Error> {
+    sqlx::query_scalar("SELECT id FROM tags WHERE name = ?").bind(name).fetch_optional(&mut **tx).await
+}
+
+pub async fn rename(tx: &mut Transaction<'_, Sqlite>, from: &str, to: &str) -> Result<(), TagOpError> {
+    let to = normalize(to)?;
+    let id = tag_id(tx, from).await?.ok_or(TagOpError::NotFound)?;
+    if to == from {
+        return Ok(());
+    }
+    if tag_id(tx, &to).await?.is_some() {
+        return Err(TagOpError::Exists);
+    }
+    sqlx::query("UPDATE tags SET name = ? WHERE id = ?").bind(&to).bind(id).execute(&mut **tx).await?;
+    Ok(())
+}
+
+/// Move every GIF of `from` onto `into` and delete `from`. Returns the ids of
+/// the GIFs that were touched.
+pub async fn merge(
+    tx: &mut Transaction<'_, Sqlite>,
+    from: &str,
+    into: &str,
+    now: i64,
+) -> Result<Vec<String>, TagOpError> {
+    let into = normalize(into)?;
+    let src = tag_id(tx, from).await?.ok_or(TagOpError::NotFound)?;
+    let dst = tag_id(tx, &into).await?.ok_or(TagOpError::NotFound)?;
+    if src == dst {
+        return Ok(vec![]);
+    }
+    let gifs: Vec<String> = sqlx::query_scalar("SELECT gif_id FROM gif_tags WHERE tag_id = ?")
+        .bind(src)
+        .fetch_all(&mut **tx)
+        .await?;
+    sqlx::query("INSERT OR IGNORE INTO gif_tags (gif_id, tag_id, created_at) SELECT gif_id, ?, created_at FROM gif_tags WHERE tag_id = ?")
+        .bind(dst)
+        .bind(src)
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query("DELETE FROM tags WHERE id = ?").bind(src).execute(&mut **tx).await?; // cascades gif_tags
+    sqlx::query("UPDATE tags SET last_used_at = MAX(COALESCE(last_used_at, 0), ?) WHERE id = ?")
+        .bind(now)
+        .bind(dst)
+        .execute(&mut **tx)
+        .await?;
+    recount_tag(tx, dst).await?;
+    recount_gifs(tx, &gifs, now).await?;
+    Ok(gifs)
+}
+
+/// Remove a hashtag from every GIF. Returns the ids of the GIFs it was on.
+pub async fn delete(
+    tx: &mut Transaction<'_, Sqlite>,
+    name: &str,
+    now: i64,
+) -> Result<Vec<String>, TagOpError> {
+    let id = tag_id(tx, name).await?.ok_or(TagOpError::NotFound)?;
+    let gifs: Vec<String> = sqlx::query_scalar("SELECT gif_id FROM gif_tags WHERE tag_id = ?")
+        .bind(id)
+        .fetch_all(&mut **tx)
+        .await?;
+    sqlx::query("DELETE FROM tags WHERE id = ?").bind(id).execute(&mut **tx).await?;
+    recount_gifs(tx, &gifs, now).await?;
+    Ok(gifs)
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AddTagsError {
     #[error(transparent)]

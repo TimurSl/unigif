@@ -336,7 +336,6 @@ async fn jobs_resume_after_a_restart() {
         let mut cfg = unigif::config::Config::default();
         cfg.data_dir = dir.join("data");
         cfg.cache_dir = dir.join("cache");
-        cfg.auth.bootstrap_token = Some(TOKEN.into());
         cfg.media.preset = "ultrafast".into();
         cfg
     };
