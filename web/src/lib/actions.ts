@@ -1,6 +1,7 @@
 // Things you can do to a GIF from more than one place (tile menu, detail view, tag sheet).
 import { api, mediaPath, type Gif } from './api';
 import { emitGif, errorText, refreshStats, toast } from './app.svelte';
+import { ignoreEventsFor } from './live';
 
 /** The address people paste elsewhere: the full MP4, as an absolute URL. */
 export function gifUrl(g: Gif): string | null {
@@ -67,4 +68,32 @@ export async function trashGif(g: Gif): Promise<boolean> {
     ms: 5000,
   });
   return true;
+}
+
+const BATCH_MAX = 500;
+
+/** Tag changes or trash for many GIFs; the server takes 500 ids a request. */
+export async function batchChange(ids: string[], change: { add?: string[]; remove?: string[]; trash?: boolean }) {
+  ignoreEventsFor(ids);
+  for (let i = 0; i < ids.length; i += BATCH_MAX) await api.batch(ids.slice(i, i + BATCH_MAX), change);
+}
+
+/** Restore many GIFs, a few at a time. Resolves to how many came back. */
+export async function restoreMany(ids: string[]): Promise<number> {
+  ignoreEventsFor(ids);
+  let restored = 0;
+  const queue = ids.slice();
+  const worker = async () => {
+    for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
+      try {
+        emitGif('added', await api.restore(id));
+        restored++;
+      } catch {
+        /* purged or already restored */
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: 6 }, worker));
+  void refreshStats();
+  return restored;
 }

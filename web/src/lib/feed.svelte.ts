@@ -55,8 +55,12 @@ export class Feed {
     if (i >= 0) this.items.splice(i, 1);
   }
 
+  has(id: string) {
+    return this.items.some((g) => g.id === id);
+  }
+
   prepend(gif: Gif) {
-    if (this.items.some((g) => g.id === gif.id)) return;
+    if (this.has(gif.id)) return this.replace(gif);
     this.items.unshift(gif);
     this.schedulePoll();
   }

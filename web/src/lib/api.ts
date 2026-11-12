@@ -90,6 +90,20 @@ export interface SearchItem {
   download: { url: string; format: 'gif' | 'mp4'; bytes: number | null };
 }
 
+export interface ApiKey {
+  id: string;
+  name: string;
+  scopes: Scope[];
+  deny_tags: string[];
+  rate_limit: number | null;
+  created_at: string;
+  expires_at: string | null;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
+
+export type KeyPreset = 'read_only' | 'uploader' | 'picker' | 'full';
+
 export interface Page<T> {
   items: T[];
   next_cursor: string | null;
@@ -153,6 +167,8 @@ function qs(params: Record<string, string | number | boolean | undefined | null>
 export interface ListParams {
   q?: string;
   unsorted?: boolean;
+  /** The trash instead of the library (needs the delete scope). */
+  trash?: boolean;
   sort?: 'new' | 'old' | 'used';
   limit?: number;
   cursor?: string | null;
@@ -173,11 +189,30 @@ export const api = {
   setTags: (id: string, tags: string[]) => request<Gif>('PATCH', `/gifs/${id}`, { body: { tags } }),
   trash: (id: string) => request<void>('DELETE', `/gifs/${id}`),
   restore: (id: string) => request<Gif>('POST', `/gifs/${id}/restore`),
+  /** All or nothing, at most 500 ids. */
+  batch: (ids: string[], change: { add?: string[]; remove?: string[]; trash?: boolean }) =>
+    request<{ updated: number; not_found: string[] }>('POST', '/gifs/batch', { body: { ids, ...change } }),
 
   listTags: (p: { q?: string; sort?: 'recent' | 'popular' | 'alpha'; limit?: number }) =>
     request<Page<Tag>>('GET', `/tags${qs({ ...p })}`),
   suggest: (selected: string[], limit = 12) =>
     request<{ recent: Tag[]; related: Tag[] }>('GET', `/tags/suggest${qs({ selected: selected.join(','), limit })}`),
+
+  renameTag: (name: string, to: string) =>
+    request<Tag>('PATCH', `/tags/${encodeURIComponent(name)}`, { body: { name: to } }),
+  mergeTag: (name: string, into: string) =>
+    request<Tag>('POST', `/tags/${encodeURIComponent(name)}/merge`, { body: { into } }),
+  deleteTag: (name: string) => request<void>('DELETE', `/tags/${encodeURIComponent(name)}`),
+  listTagsPage: (p: { q?: string; sort?: 'recent' | 'popular' | 'alpha'; limit?: number; cursor?: string | null }) =>
+    request<Page<Tag>>('GET', `/tags${qs({ ...p })}`),
+
+  listKeys: (includeRevoked: boolean) =>
+    request<{ items: ApiKey[] }>('GET', `/keys${qs({ include_revoked: includeRevoked })}`),
+  createKey: (b: { name: string; preset: KeyPreset; deny_tags?: string[]; rate_limit?: number | null; expires_in_days?: number }) =>
+    request<ApiKey & { key: string }>('POST', '/keys', { body: b }),
+  updateKey: (id: string, b: { name?: string; preset?: KeyPreset; deny_tags?: string[]; rate_limit?: number | null }) =>
+    request<ApiKey>('PATCH', `/keys/${id}`, { body: b }),
+  revokeKey: (id: string) => request<void>('DELETE', `/keys/${id}`),
 
   upload: (file: Blob, type: string) =>
     request<Gif>('POST', `/gifs${qs({ source: 'web', wait: 0 })}`, {

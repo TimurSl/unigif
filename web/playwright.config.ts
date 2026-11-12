@@ -4,6 +4,7 @@ import { defineConfig, devices } from '@playwright/test';
 const desktopPort = Number(process.env.E2E_PORT ?? 8799);
 const phonePort = Number(process.env.E2E_PHONE_PORT ?? 8798);
 const searchPort = Number(process.env.E2E_SEARCH_PORT ?? 8797);
+const managePort = Number(process.env.E2E_MANAGE_PORT ?? 8796);
 
 const server = (port: number, extra: Record<string, string> = {}) => ({
   command: 'node e2e/serve.mjs',
@@ -44,6 +45,12 @@ export default defineConfig({
       testMatch: /search\.spec\.ts/,
       use: { baseURL: `http://127.0.0.1:${searchPort}` },
     },
+    {
+      // Live updates, batch select, hashtag management, trash and API keys.
+      name: 'manage',
+      testMatch: /manage\.spec\.ts/,
+      use: { baseURL: `http://127.0.0.1:${managePort}` },
+    },
   ],
-  webServer: [server(desktopPort), server(phonePort), server(searchPort, { E2E_PROVIDER: '1' })],
+  webServer: [server(desktopPort), server(phonePort), server(searchPort, { E2E_PROVIDER: '1' }), server(managePort)],
 });

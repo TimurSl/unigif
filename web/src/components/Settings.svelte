@@ -3,6 +3,7 @@
   import { api, type ProviderId, type SearchProvider } from '../lib/api';
   import { app, errorText, logout, toast } from '../lib/app.svelte';
   import { install, isIos, pwa } from '../lib/pwa.svelte';
+  import { linkClick } from '../lib/router.svelte';
 
   const size = (n: number) =>
     n >= 1073741824 ? `${(n / 1073741824).toFixed(1)} GB` : n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(0, Math.round(n / 1024))} kB`;
@@ -41,6 +42,15 @@
     <h2>Account</h2>
     <p>Signed in as <strong>{app.me?.name}</strong></p>
     <button class="btn danger" type="button" onclick={logout}>Sign out</button>
+  </div>
+
+  <div class="card" data-testid="manage-card">
+    <h2>Manage</h2>
+    <ul class="links">
+      <li><a href="/tags" onclick={(e) => linkClick(e, '/tags')}>Hashtags</a><span>Rename, merge or remove</span></li>
+      <li><a href="/trash" onclick={(e) => linkClick(e, '/trash')}>Trash</a><span>{app.stats?.trash ?? 0} deleted GIFs</span></li>
+      <li><a href="/keys" onclick={(e) => linkClick(e, '/keys')}>API keys</a><span>Let other apps and people in</span></li>
+    </ul>
   </div>
 
   {#if providers.length}
@@ -196,6 +206,32 @@
     border-radius: var(--radius-control);
     color: var(--text);
     font-size: 16px;
+  }
+  .links {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+  }
+  .links li {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: baseline;
+    padding: 10px 0;
+    border-top: 1px solid var(--border);
+  }
+  .links li:first-child {
+    border-top: 0;
+    padding-top: 0;
+  }
+  .links a {
+    color: var(--text);
+    font-weight: 500;
+  }
+  .links span {
+    color: var(--text-faint);
+    font-size: 13px;
   }
   dt {
     color: var(--text-muted);

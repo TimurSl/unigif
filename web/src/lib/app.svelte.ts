@@ -1,4 +1,5 @@
 import { api, ApiError, setUnauthorizedHandler, type Me, type Stats, type Tag, type Gif } from './api';
+import { startLive, stopLive } from './live';
 import { navigate, route } from './router.svelte';
 
 export interface Toast {
@@ -58,6 +59,7 @@ export function errorText(e: unknown): string {
 
 setUnauthorizedHandler(() => {
   if (app.phase === 'ready') {
+    stopLive();
     app.phase = 'anon';
     app.me = null;
     navigate('/login', { replace: true });
@@ -76,6 +78,7 @@ export async function boot() {
     if (route.view === 'login') navigate('/', { replace: true });
     void refreshStats();
     void refreshTopTags();
+    startLive();
   } catch (e) {
     app.phase = 'anon';
     if (e instanceof ApiError && e.status !== 401) toast(errorText(e), { kind: 'error' });
@@ -93,6 +96,7 @@ export async function logout() {
   try {
     await api.logout();
   } finally {
+    stopLive();
     app.phase = 'anon';
     app.me = null;
     navigate('/login', { replace: true });
@@ -160,4 +164,16 @@ export function onGifEvent(fn: GifListener): () => void {
 
 export function emitGif(kind: 'changed' | 'removed' | 'added', gif: Gif) {
   for (const l of listeners) l(kind, gif);
+}
+
+/** The server asked for a reload (or the live connection dropped): lists start over. */
+const resyncListeners = new Set<() => void>();
+
+export function onResync(fn: () => void): () => void {
+  resyncListeners.add(fn);
+  return () => resyncListeners.delete(fn);
+}
+
+export function emitResync() {
+  for (const l of resyncListeners) l();
 }

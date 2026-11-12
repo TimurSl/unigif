@@ -6,12 +6,15 @@
   import { looksLikeUrl, uploadFiles, uploadShared, uploadUrl } from './lib/upload';
   import AddSheet from './components/AddSheet.svelte';
   import Detail from './components/Detail.svelte';
+  import Hashtags from './components/Hashtags.svelte';
+  import Keys from './components/Keys.svelte';
   import ListView from './components/ListView.svelte';
   import Login from './components/Login.svelte';
   import Search from './components/Search.svelte';
   import Settings from './components/Settings.svelte';
   import Sidebar from './components/Sidebar.svelte';
   import Toasts from './components/Toasts.svelte';
+  import Trash from './components/Trash.svelte';
 
   let picker: HTMLInputElement | undefined = $state();
   let dragging = $state(false);
@@ -94,6 +97,12 @@
     {#key route.view}
       {#if route.view === 'settings'}
         <Settings />
+      {:else if route.view === 'tags'}
+        <Hashtags />
+      {:else if route.view === 'trash'}
+        <Trash />
+      {:else if route.view === 'keys'}
+        <Keys />
       {:else if route.view === 'search'}
         <Search />
       {:else}

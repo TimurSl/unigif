@@ -4,7 +4,7 @@
   import Sheet from './Sheet.svelte';
 
   // The long-press menu on a phone (plan 9.3): Copy link, Share, Edit hashtags, Delete.
-  let { gif, onedit, onclose }: { gif: Gif; onedit: (g: Gif) => void; onclose: () => void } = $props();
+  let { gif, onedit, onselect, onclose }: { gif: Gif; onedit: (g: Gif) => void; onselect?: (g: Gif) => void; onclose: () => void } = $props();
 
   // The menu's `gif` prop turns null as soon as the menu closes, so actions take their own copy first.
   // svelte-ignore state_referenced_locally
@@ -42,6 +42,16 @@
       onedit(target);
     }}>Edit hashtags</button
   >
+  {#if onselect}
+    <button
+      class="btn row"
+      type="button"
+      onclick={() => {
+        onclose();
+        onselect(target);
+      }}>Select</button
+    >
+  {/if}
   <button
     class="btn row danger"
     type="button"

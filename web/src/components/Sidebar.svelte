@@ -36,7 +36,10 @@
     </li>
   </ul>
   {#if app.topTags.length}
-    <h2>Hashtags</h2>
+    <h2>
+      Hashtags
+      <a class="manage" href="/tags" onclick={(e) => linkClick(e, '/tags')}>Manage</a>
+    </h2>
     <ul class="tags">
       {#each app.topTags as t (t.name)}
         <li>
@@ -53,6 +56,11 @@
     </ul>
   {/if}
   <div class="foot">
+    <a class="tab trash-tab" href="/trash" class:current={route.view === 'trash'} onclick={(e) => linkClick(e, '/trash')}>
+      <svg class="ico" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-12M9 7V4h6v3" /></svg>
+      <span>Trash</span>
+      {#if app.stats && app.stats.trash > 0}<span class="count">{app.stats.trash}</span>{/if}
+    </a>
     <a class="tab" href="/settings" class:current={route.view === 'settings'} onclick={(e) => linkClick(e, '/settings')}>
       <svg class="ico" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10" /><circle cx="16" cy="7" r="2" /><circle cx="8" cy="17" r="2" /></svg>
       <span>Settings</span>
@@ -113,12 +121,21 @@
     display: none;
   }
   h2 {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
     margin: 16px 12px 4px;
     font-size: 12px;
     font-weight: 500;
     letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--text-faint);
+  }
+  .manage {
+    font-size: 12px;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--text-muted);
   }
   .tags .tab {
     min-height: 32px;
@@ -164,7 +181,8 @@
     h2,
     .tags,
     .account,
-    .badge {
+    .badge,
+    .foot .count {
       display: none;
     }
     .ico {
@@ -213,6 +231,9 @@
     .foot {
       margin: 0;
       flex: 1;
+    }
+    .trash-tab {
+      display: none;
     }
     .phone-only {
       display: block;

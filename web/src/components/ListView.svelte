@@ -1,11 +1,15 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { batchChange, restoreMany } from '../lib/actions';
   import { type Gif } from '../lib/api';
-  import { app, onGifEvent } from '../lib/app.svelte';
+  import { app, emitGif, errorText, loadRecent, onGifEvent, onResync, refreshStats, refreshTopTags, toast } from '../lib/app.svelte';
   import { Feed } from '../lib/feed.svelte';
   import { href, linkClick, navigate, openGif, route } from '../lib/router.svelte';
+  import { Selection } from '../lib/selection.svelte';
+  import BatchSheet from './BatchSheet.svelte';
   import Grid from './Grid.svelte';
   import SearchBar from './SearchBar.svelte';
+  import SelectionBar from './SelectionBar.svelte';
   import Sorter from './Sorter.svelte';
   import TileMenu from './TileMenu.svelte';
 
@@ -17,6 +21,8 @@
   /** Phone: the long-press menu, and the tag sheet it can open for one GIF. */
   let menu: Gif | null = $state(null);
   let editing: Gif | null = $state(null);
+  const selection = new Selection();
+  let batchSheet: 'add' | 'remove' | null = $state(null);
 
   const chips = $derived(route.q.split(/\s+/).filter(Boolean));
   const query = $derived([...chips, ...(draft.trim() ? [draft.trim()] : [])].join(' '));
@@ -26,6 +32,8 @@
       ? { unsorted: true, sort: app.prefs.unsorted_sort }
       : { q: query || undefined, sort: 'new' },
   );
+
+  const selectedGifs = $derived(feed.items.filter((g) => selection.has(g.id)));
 
   let lastKey = '';
   let debounce: ReturnType<typeof setTimeout> | undefined;
@@ -39,26 +47,37 @@
     else debounce = setTimeout(() => void feed.reset(), 120);
   });
 
-  // A tile that is open in the tag sheet changes under it; mirror that in the grid.
+  // Ticks follow the list: a GIF that leaves it (sorted, trashed in another tab) is no longer selected.
+  $effect(() => selection.keepOnly(feed.items));
+
+  // Changes from the tag sheet, other tabs and the API (live updates) are mirrored in the grid.
   onMount(() => {
     const off = onGifEvent((kind, g) => {
       if (kind === 'removed') feed.remove(g.id);
       else if (kind === 'changed') {
-        if (view === 'unsorted' && g.tags.length > 0) feed.remove(g.id);
+        if (!matchesChips(g) || (view === 'unsorted' && g.tags.length > 0)) feed.remove(g.id);
         else feed.replace(g);
       } else if (kind === 'added' && matchesTop(g)) feed.prepend(g);
     });
+    const offResync = onResync(() => void feed.reset());
     return () => {
       off();
+      offResync();
       clearTimeout(debounce);
       feed.destroy();
     };
   });
 
+  /** Does the GIF carry every hashtag chip and none of the excluded ones? (Library only; free text is left to the server.) */
+  function matchesChips(g: Gif): boolean {
+    if (view !== 'library') return true;
+    return chips.every((c) => (c.startsWith('-') ? !g.tags.includes(c.slice(1)) : g.tags.includes(c)));
+  }
+
   /** New uploads show up at the top of lists they belong in. */
   function matchesTop(g: Gif): boolean {
     if (view === 'unsorted') return g.tags.length === 0 && app.prefs.unsorted_sort === 'new';
-    return query === '' || chips.every((c) => c.startsWith('-') || g.tags.includes(c));
+    return draft.trim() === '' && matchesChips(g);
   }
 
   function setChips(next: string[]) {
@@ -66,6 +85,10 @@
   }
 
   function onWindowKey(e: KeyboardEvent) {
+    if (e.key === 'Escape' && selection.active && !batchSheet && !sorting && !editing && !menu) {
+      selection.stop();
+      return;
+    }
     if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
     const t = e.target as HTMLElement | null;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
@@ -74,9 +97,63 @@
     searchInput?.focus();
   }
 
-  function open(g: Gif) {
+  function open(g: Gif, e?: MouseEvent) {
+    if (selection.active) {
+      if (e?.shiftKey) selection.range(feed.items, g.id);
+      else selection.toggle(g.id);
+      return;
+    }
+    // Ctrl or Cmd click starts selecting, as in a file manager.
+    if (e && (e.ctrlKey || e.metaKey)) {
+      selection.start(g.id);
+      return;
+    }
     if (view === 'unsorted') sorting = { startId: g.id };
     else openGif(g.id);
+  }
+
+  async function applyTags(mode: 'add' | 'remove', tags: string[]) {
+    const ids = [...selection.ids];
+    batchSheet = null;
+    try {
+      await batchChange(ids, mode === 'add' ? { add: tags } : { remove: tags });
+    } catch (e) {
+      toast(errorText(e), { kind: 'error' });
+      return;
+    }
+    for (const g of feed.items.filter((x) => selection.has(x.id))) {
+      const next = mode === 'add' ? [...new Set([...g.tags, ...tags])] : g.tags.filter((t) => !tags.includes(t));
+      const updated = { ...g, tags: next };
+      if ((view === 'unsorted' && next.length > 0) || !matchesChips(updated)) feed.remove(g.id);
+      else feed.replace(updated);
+    }
+    const n = ids.length;
+    toast(`${mode === 'add' ? 'Added to' : 'Removed from'} ${n} ${n === 1 ? 'GIF' : 'GIFs'}`);
+    selection.stop();
+    void refreshStats();
+    refreshTopTags(true);
+    void loadRecent();
+  }
+
+  async function trashSelected() {
+    const ids = [...selection.ids];
+    try {
+      await batchChange(ids, { trash: true });
+    } catch (e) {
+      toast(errorText(e), { kind: 'error' });
+      return;
+    }
+    for (const id of ids) {
+      feed.remove(id);
+      emitGif('removed', { id } as Gif);
+    }
+    selection.stop();
+    void refreshStats();
+    refreshTopTags(true);
+    toast(`${ids.length} ${ids.length === 1 ? 'GIF' : 'GIFs'} moved to trash`, {
+      action: { label: 'Undo', run: () => void restoreMany(ids).then(() => refreshTopTags(true)) },
+      ms: 6000,
+    });
   }
 
   const total = $derived(app.stats?.gifs ?? 0);
@@ -109,6 +186,13 @@
         </button>
       </div>
     {/if}
+    <button
+      class="btn"
+      type="button"
+      aria-pressed={selection.active}
+      disabled={feed.items.length === 0 && !selection.active}
+      onclick={() => (selection.active ? selection.stop() : selection.start())}
+    >{selection.active ? 'Done' : 'Select'}</button>
     <button class="btn upload" type="button" onclick={onupload}>Upload</button>
   </div>
 
@@ -127,7 +211,16 @@
     </nav>
   {/if}
 
-  <Grid items={feed.items} loading={feed.loading} done={feed.done} onopen={open} onmenu={(g) => (menu = g)} onend={() => void feed.more()}>
+  <Grid
+    items={feed.items}
+    loading={feed.loading}
+    done={feed.done}
+    onopen={open}
+    onmenu={(g) => (menu = g)}
+    onend={() => void feed.more()}
+    selecting={selection.active}
+    selected={(id) => selection.has(id)}
+  >
     {#snippet empty()}
       {#if view === 'unsorted'}
         <p><strong>All sorted.</strong></p>
@@ -141,13 +234,30 @@
       {/if}
     {/snippet}
   </Grid>
+
+  {#if selection.active}
+    <SelectionBar count={selection.count} loaded={feed.items.length} onall={() => selection.all(feed.items)} oncancel={() => selection.stop()}>
+      <button class="btn" type="button" disabled={selection.count === 0} onclick={() => (batchSheet = 'add')}>Add hashtags</button>
+      <button class="btn" type="button" disabled={selection.count === 0} onclick={() => (batchSheet = 'remove')}>Remove hashtags</button>
+      <button class="btn danger" type="button" disabled={selection.count === 0} onclick={trashSelected}>Move to trash</button>
+    </SelectionBar>
+  {/if}
 </section>
+
+{#if batchSheet}
+  <BatchSheet
+    mode={batchSheet}
+    gifs={selectedGifs}
+    onsubmit={(tags) => batchSheet && void applyTags(batchSheet, tags)}
+    onclose={() => (batchSheet = null)}
+  />
+{/if}
 
 {#if sorting}
   <Sorter mode="queue" startId={sorting.startId} onclose={() => (sorting = null)} />
 {/if}
 {#if menu}
-  <TileMenu gif={menu} onedit={(g) => (editing = g)} onclose={() => (menu = null)} />
+  <TileMenu gif={menu} onedit={(g) => (editing = g)} onselect={(g) => selection.start(g.id)} onclose={() => (menu = null)} />
 {/if}
 {#if editing}
   <Sorter mode="edit" gif={editing} onclose={() => (editing = null)} />

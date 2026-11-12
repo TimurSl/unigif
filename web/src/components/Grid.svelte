@@ -10,11 +10,16 @@
     onend,
     onmenu,
     empty,
+    selecting = false,
+    selected,
   }: {
     items: Gif[];
     loading: boolean;
     done: boolean;
-    onopen: (g: Gif) => void;
+    onopen: (g: Gif, e?: MouseEvent) => void;
+    /** Select mode: tiles show ticks; `selected` says which are ticked. */
+    selecting?: boolean;
+    selected?: (id: string) => boolean;
     onend: () => void;
     /** Long-press on a tile (touch only). */
     onmenu?: (g: Gif) => void;
@@ -109,7 +114,14 @@
       {#each visible as i (items[i].id)}
         {@const b = layout.boxes[i]}
         <div class="slot" style:transform="translate({b.x}px, {b.y}px)" style:width="{colW}px" style:height="{b.h}px">
-          <Tile gif={items[i]} {onopen} {onmenu} animate={playing === null || playing.has(i)} />
+          <Tile
+            gif={items[i]}
+            {onopen}
+            onmenu={selecting ? undefined : onmenu}
+            animate={playing === null || playing.has(i)}
+            {selecting}
+            selected={selected?.(items[i].id) ?? false}
+          />
         </div>
       {/each}
     </div>
