@@ -3,13 +3,14 @@ import { defineConfig, devices } from '@playwright/test';
 // Two throwaway servers, one per project, so the desktop and phone suites each start from an empty library.
 const desktopPort = Number(process.env.E2E_PORT ?? 8799);
 const phonePort = Number(process.env.E2E_PHONE_PORT ?? 8798);
+const searchPort = Number(process.env.E2E_SEARCH_PORT ?? 8797);
 
-const server = (port: number) => ({
+const server = (port: number, extra: Record<string, string> = {}) => ({
   command: 'node e2e/serve.mjs',
   url: `http://127.0.0.1:${port}/readyz`,
   reuseExistingServer: false,
   timeout: 120_000,
-  env: { E2E_PORT: String(port) },
+  env: { E2E_PORT: String(port), ...extra },
 });
 
 // The tests run against a real server binary (with ffmpeg) in a throwaway data directory.
@@ -37,6 +38,12 @@ export default defineConfig({
       testMatch: /mobile\.spec\.ts/,
       use: { ...devices['Pixel 7'], baseURL: `http://127.0.0.1:${phonePort}` },
     },
+    {
+      // Third-party search, against a stand-in provider started by the same script.
+      name: 'search',
+      testMatch: /search\.spec\.ts/,
+      use: { baseURL: `http://127.0.0.1:${searchPort}` },
+    },
   ],
-  webServer: [server(desktopPort), server(phonePort)],
+  webServer: [server(desktopPort), server(phonePort), server(searchPort, { E2E_PROVIDER: '1' })],
 });

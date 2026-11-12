@@ -21,6 +21,7 @@ servers:
 tags:
   - {name: gifs}
   - {name: tags}
+  - {name: search}
   - {name: keys}
   - {name: auth}
   - {name: system}
@@ -172,7 +173,7 @@ paths:
       x-scope: upload
       parameters:
         - {name: tags, in: query, schema: {type: string}, description: Hashtags separated by commas or spaces}
-        - {name: source, in: query, schema: {type: string, enum: [web, api, url, share, telegram, import]}}
+        - {name: source, in: query, schema: {type: string, enum: [web, api, url, share, telegram, import, giphy, klipy]}}
         - {name: source_id, in: query, schema: {type: string, maxLength: 256}, description: Makes retries idempotent}
         - {name: description, in: query, schema: {type: string, maxLength: 2000}}
         - {name: wait, in: query, schema: {type: integer, minimum: 0, maximum: 60, default: 10}, description: Seconds to wait for processing}
@@ -514,6 +515,74 @@ paths:
         "401": {$ref: '#/components/responses/Problem'}
         "403": {$ref: '#/components/responses/Problem'}
         "404": {$ref: '#/components/responses/Problem'}
+  /search/providers:
+    get:
+      tags: [search]
+      summary: Third-party GIF search providers and whether each has an API key
+      description: Tenor is not offered because Google shut its public API down on 30 June 2026.
+      x-scope: upload
+      responses:
+        "200":
+          description: The providers
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SearchProviderList'}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
+  /search/providers/{id}/key:
+    put:
+      tags: [search]
+      summary: Save, replace or remove a provider's API key
+      description: |
+        Needs a login session. The key is stored on the server and never returned. A key saved here wins over one
+        in the configuration file; `null` (or an empty string) removes it.
+      x-scope: session
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string, enum: [klipy, giphy]}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                key: {type: [string, "null"], maxLength: 200}
+      responses:
+        "200":
+          description: The provider, as listed by `/search/providers`
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SearchProvider'}
+        "400": {$ref: '#/components/responses/Problem'}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
+        "404": {$ref: '#/components/responses/Problem'}
+  /search:
+    get:
+      tags: [search]
+      summary: Search a third-party provider (trending when `q` is empty)
+      description: |
+        Results are normalised across providers. To add one to the library, `POST /gifs` with
+        `{"url": download.url, "source": provider, "source_id": id}`: it is fetched by the server, deduplicated and
+        lands in Unsorted unless tags are sent.
+      x-scope: upload
+      parameters:
+        - {name: provider, in: query, required: true, schema: {type: string, enum: [klipy, giphy]}}
+        - {name: q, in: query, schema: {type: string, maxLength: 200}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 50, default: 24}}
+        - {name: cursor, in: query, schema: {type: string}}
+      responses:
+        "200":
+          description: A page of results
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SearchPage'}
+        "400": {$ref: '#/components/responses/Problem'}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
+        "409": {$ref: '#/components/responses/Problem'}
+        "429": {$ref: '#/components/responses/Problem'}
+        "502": {$ref: '#/components/responses/Problem'}
   /stats:
     get:
       tags: [system]
@@ -576,7 +645,53 @@ components:
         detail: {type: string}
         code:
           type: string
-          description: "Stable: bad_request, unauthorized, invalid_credentials, forbidden, scope_required, not_found, conflict, too_large, unsupported_media, invalid_media, rate_limited, fetch_failed, internal"
+          description: "Stable: bad_request, unauthorized, invalid_credentials, forbidden, scope_required, not_found, conflict, too_large, unsupported_media, invalid_media, rate_limited, fetch_failed, not_configured, provider_error, internal"
+    SearchProvider:
+      type: object
+      required: [id, name, configured, key_source, keys_url]
+      properties:
+        id: {type: string, enum: [klipy, giphy]}
+        name: {type: string}
+        configured: {type: boolean}
+        key_source: {type: [string, "null"], enum: [settings, config, null]}
+        keys_url: {type: string, format: uri, description: Where to get an API key}
+    SearchProviderList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/SearchProvider'}
+    SearchItem:
+      type: object
+      required: [id, title, width, height, preview, download, page_url]
+      properties:
+        id: {type: string}
+        title: {type: string}
+        width: {type: [integer, "null"]}
+        height: {type: [integer, "null"]}
+        page_url: {type: [string, "null"], format: uri}
+        preview:
+          type: object
+          required: [url, kind]
+          properties:
+            url: {type: string, format: uri}
+            kind: {type: string, enum: [video, image]}
+        download:
+          type: object
+          required: [url, format, bytes]
+          properties:
+            url: {type: string, format: uri}
+            format: {type: string, enum: [gif, mp4]}
+            bytes: {type: [integer, "null"]}
+    SearchPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/SearchItem'}
+        next_cursor: {type: [string, "null"]}
     LoginRequest:
       type: object
       required: [username, password]

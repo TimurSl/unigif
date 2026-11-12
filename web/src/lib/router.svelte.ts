@@ -1,9 +1,11 @@
-// A very small path router. Routes: / (library), /unsorted, /settings, /login. A GIF's detail view is an overlay
+// A very small path router. Routes: / (library), /unsorted, /search, /settings, /login. A GIF's detail view is an overlay
 // on top of the current list, addressed by `?gif=<id>`, so the list underneath keeps its place.
 
 export interface Route {
-  view: 'library' | 'unsorted' | 'settings' | 'login';
+  view: 'library' | 'unsorted' | 'search' | 'settings' | 'login';
   q: string;
+  /** Search view only: the provider being searched. */
+  provider: string;
   gif: string | null;
 }
 
@@ -12,12 +14,14 @@ function parse(): Route {
   const path = location.pathname;
   const view = path.startsWith('/unsorted')
     ? 'unsorted'
-    : path.startsWith('/settings')
+    : path.startsWith('/search')
+      ? 'search'
+      : path.startsWith('/settings')
       ? 'settings'
       : path.startsWith('/login')
         ? 'login'
         : 'library';
-  return { view, q: params.get('q') ?? '', gif: params.get('gif') };
+  return { view, q: params.get('q') ?? '', provider: params.get('provider') ?? '', gif: params.get('gif') };
 }
 
 export const route: Route = $state(parse());
@@ -28,7 +32,7 @@ function sync() {
 window.addEventListener('popstate', sync);
 
 export function href(view: Route['view'], q = ''): string {
-  const base = view === 'unsorted' ? '/unsorted' : view === 'settings' ? '/settings' : view === 'login' ? '/login' : '/';
+  const base = view === 'unsorted' ? '/unsorted' : view === 'search' ? '/search' : view === 'settings' ? '/settings' : view === 'login' ? '/login' : '/';
   return q ? `${base}?q=${encodeURIComponent(q)}` : base;
 }
 

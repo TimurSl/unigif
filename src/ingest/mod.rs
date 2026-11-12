@@ -18,7 +18,7 @@ use crate::tags;
 
 pub mod worker;
 
-pub const SOURCES: [&str; 6] = ["web", "api", "url", "share", "telegram", "import"];
+pub const SOURCES: [&str; 8] = ["web", "api", "url", "share", "telegram", "import", "giphy", "klipy"];
 
 /// A file received into `tmp/`. Deleted on drop; a rename away makes the
 /// drop a no-op.

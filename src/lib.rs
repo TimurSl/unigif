@@ -13,5 +13,6 @@ pub mod import;
 pub mod ingest;
 pub mod janitor;
 pub mod media;
+pub mod search;
 pub mod tags;
 pub mod web;

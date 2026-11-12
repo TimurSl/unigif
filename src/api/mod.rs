@@ -3,7 +3,7 @@
 use axum::extract::DefaultBodyLimit;
 use axum::http::{header, HeaderName, HeaderValue, Method};
 use axum::middleware::from_fn_with_state;
-use axum::routing::{delete, get, patch, post};
+use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -19,6 +19,7 @@ pub mod files;
 mod gifs;
 mod keys;
 mod misc;
+mod search;
 mod session;
 mod share;
 mod tags;
@@ -26,7 +27,7 @@ pub mod types;
 
 pub use misc::spec;
 
-const CSP: &str = "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; \
+const CSP: &str = "default-src 'self'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; \
 style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; \
 frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 
@@ -79,6 +80,9 @@ pub fn router(app: App) -> Router {
         .route("/tags/suggest", get(tags::suggest))
         .route("/tags/{name}", patch(tags::rename).delete(tags::delete))
         .route("/tags/{name}/merge", post(tags::merge))
+        .route("/search", get(search::find))
+        .route("/search/providers", get(search::providers))
+        .route("/search/providers/{id}/key", put(search::set_key))
         .route("/keys", get(keys::list).post(keys::create))
         .route("/keys/{id}", patch(keys::patch).delete(keys::revoke))
         .route("/stats", get(misc::stats))
