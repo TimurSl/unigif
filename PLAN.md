@@ -2,7 +2,7 @@
 
 A self-hosted, hashtag-first GIF library with a scoped-key API, MP4-based storage, a keyboard-driven sorting flow, a mobile UI, and first-class NixOS packaging. Built so that Telegram clients, bots, and your own social network can use it as a GIF provider.
 
-Status: plan only, no code yet. Stack, media visibility, tenancy, originals policy, and licence are confirmed by the owner (section 14). Items marked **(verify)** are facts I could not fully confirm during research and must be checked when that part is built.
+Status: **M0 and M1 are implemented** (see section 13 for what that covers and where the code departs from this text). Stack, media visibility, tenancy, originals policy, and licence are confirmed by the owner (section 14). Items marked **(verify)** are facts I could not fully confirm during research and must be checked when that part is built.
 
 ---
 
@@ -11,7 +11,7 @@ Status: plan only, no code yet. Stack, media visibility, tenancy, originals poli
 | Area | Decision | Why |
 |---|---|---|
 | Backend | Rust, single binary, `axum` on `tokio` | One self-contained binary is the easiest thing to package and harden on NixOS; ffmpeg is driven as a subprocess |
-| Database | SQLite (WAL mode) through `sqlx` | One owner, one host; no extra service to run or back up. Queries are checked at compile time |
+| Database | SQLite (WAL mode) through `sqlx` | One owner, one host; no extra service to run or back up. Queries are plain runtime `sqlx::query` calls covered by integration tests (see 13.1) |
 | Media engine | `ffmpeg` / `ffprobe` (`ffmpeg-headless` on NixOS) | Does every conversion needed, both directions |
 | Stored format | H.264 MP4, no audio, `+faststart` | Same format Telegram uses for GIFs, plays everywhere, typically several times smaller than GIF |
 | Other formats | GIF / WebM / animated WebP generated on demand, kept in an evictable cache | Space is spent only on formats somebody actually asks for |
@@ -137,7 +137,6 @@ unigif/
 │  ├─ api/               # router, handlers, extractors, problem+json errors
 │  └─ web.rs             # embedded web/dist, SPA fallback
 ├─ migrations/           # SQL migrations, embedded with sqlx::migrate!
-├─ .sqlx/                # committed query metadata, so builds need no live database
 ├─ tests/                # integration tests (API, media pipeline)
 ├─ api/openapi.yaml      # written first; source of truth for the API
 ├─ web/                  # Svelte 5 + Vite + TypeScript
@@ -149,9 +148,9 @@ A single crate to start. Split into a workspace only if compile times or a secon
 
 ### 4.2 Libraries
 
-- Server: `axum` and `tower-http` (routing, body limits, compression, CORS), `tokio` (runtime, `tokio::process` for ffmpeg), `sqlx` with bundled SQLite (queries and migrations), `serde`, `clap` (CLI), `figment` (TOML + environment config), `tracing` (structured logs).
+- Server: `axum` and `tower-http` (routing, body limits, compression, CORS), `tokio` (runtime, `tokio::process` for ffmpeg), `sqlx` with bundled SQLite (queries and migrations; runtime-checked, no query macros), `serde`, `clap` (CLI), `figment` (TOML + environment config), `tracing` (structured logs).
 - Auth and crypto: `argon2`, `sha2`, `rand`, `subtle` (constant-time comparison), `governor` (rate limiting).
-- Media helpers: `image` (decode the poster for hashing), `thumbhash`, `infer` (file-type detection from content). All encoding stays in ffmpeg.
+- Media helpers: `thumbhash`, `infer` (file-type detection from content). All decoding and encoding stays in ffmpeg: the ThumbHash and dHash inputs are raw pixels that ffmpeg scales from the poster, so the `image` crate is not needed.
 - Other: `reqwest` with a custom DNS resolver for the SSRF-safe URL fetch, `rust-embed` to embed the built web UI, `unicode-normalization` for hashtags.
 - Web: Svelte 5, Vite, TypeScript, Lucide icons. No CSS framework: a single tokens file plus component styles. No web fonts fetched from third parties.
 
@@ -368,7 +367,8 @@ ffmpeg always runs with `-nostdin`, a restricted protocol whitelist (`file` only
   media/7K/7Kq2mXw9Fb3T/preview.mp4
   media/7K/7Kq2mXw9Fb3T/poster.webp
   media/7K/7Kq2mXw9Fb3T/original.gif        # only when kept
-  tmp/                                      # in-flight uploads, wiped at start
+  tmp/                                      # in-flight uploads and finished-but-unmoved outputs, wiped at start
+  work/{id}.src                             # source of a GIF that is queued or transcoding; survives restarts
   backups/                                  # nightly DB snapshots
 /var/cache/unigif/
   7K/7Kq2mXw9Fb3T/full.gif                  # on-demand, evictable
@@ -749,7 +749,8 @@ Systems: `x86_64-linux` and `aarch64-linux`.
 
 Build notes:
 
-- The Nix build runs with `SQLX_OFFLINE=true` and the committed `.sqlx/` metadata, because the sandbox has no database. CI fails if `.sqlx/` is out of date (`cargo sqlx prepare --check`).
+- No database is needed at build time: queries are runtime-checked, so there is no `.sqlx/` metadata to keep in sync. The package's `checkPhase` runs the whole cargo test suite (real ffmpeg) instead.
+- `nixpkgs` is pinned as a channel tarball (`https://channels.nixos.org/nixos-26.05/nixexprs.tar.xz`) rather than `github:NixOS/nixpkgs/...`; it locks the same way.
 - SQLite is compiled in (bundled), so the binary has no runtime library dependency beyond libc.
 - Only nixpkgs is a flake input. If incremental CI builds become slow, switching the package to `crane` is a contained change.
 
@@ -883,14 +884,33 @@ Sizes are relative (S / M / L), not time estimates.
 
 | # | Milestone | Size | Done when |
 |---|---|---|---|
-| M0 | **Skeleton**: MIT `LICENSE`, flake, dev shell, CI, Rust server serving an embedded empty SPA, `nix build` and `nix run` work | S | A fresh clone builds and starts with one command |
-| M1 | **Storage core**: schema, migrations, ingest pipeline, stored variants, dedupe, media serving, `import` and `doctor` | L | `curl` quick add of a GIF yields `full.mp4`, `preview.mp4`, `poster.webp`; Range requests work; the same file twice returns `duplicate` |
+| M0 ✅ | **Skeleton**: MIT `LICENSE`, flake, dev shell, CI, Rust server serving an embedded empty SPA, `nix build` and `nix run` work | S | A fresh clone builds and starts with one command |
+| M1 ✅ | **Storage core**: schema, migrations, ingest pipeline, stored variants, dedupe, media serving, `import` and `doctor` | L | `curl` quick add of a GIF yields `full.mp4`, `preview.mp4`, `poster.webp`; Range requests work; the same file twice returns `duplicate` |
 | M2 | **Auth and API**: login, sessions, API keys with scopes and `deny_tags`, rate limits, all section 8 endpoints, OpenAPI served | L | Contract tests pass against `openapi.yaml`; a `read` key gets `403` on upload |
 | M3 | **Web UI**: login, Library, search, Unsorted, tag sheet with every key in 9.4, upload by drag and paste, detail view | L | An end-to-end test sorts three GIFs using only the keyboard |
 | M4 | **Mobile and PWA**: responsive layout, bottom bar, full-screen tag sheet, gestures, installable, Android share target | M | The same sorting test passes in a phone viewport; a shared GIF lands in Unsorted |
 | M5 | **Conversion**: on-demand GIF / WebM / WebP, cache with eviction, share page with OpenGraph, storage stats | M | `full.gif` is generated once and served from cache after; the cache stays under its limit |
 | M6 | **NixOS**: module, hardening, nginx integration, backup timer, VM test, deployment guide | M | The VM test in 10.4 passes; the service runs on the VPS |
 | M7 | **Polish**: hashtag management (rename, merge), trash, batch select, co-occurrence suggestions, live updates over SSE, API key screen refinements | M | Renaming or merging a hashtag updates every GIF; a GIF added through the API appears in an open Unsorted tab without a reload |
+
+### 13.1 Implementation notes (M0 and M1)
+
+Built in this order, and verified by `cargo test` (27 unit and 21 integration tests with real ffmpeg), `cargo clippy -D warnings`, a curl run against the real binary, and `nix build`.
+
+**M0, skeleton: done.** MIT `LICENSE`, `Cargo.toml`, flake (`packages`, `overlays`, `devShells`, `apps` for `nix run`, `formatter`, `checks`), `.github/workflows/ci.yml` (Rust, web with a 150 kB JS budget, Nix), Svelte 5 + Vite shell embedded with `rust-embed`, and a `build.rs` that creates `web/dist` so a plain `cargo build` works before the UI has been built.
+
+**M1, storage core: done**, with these departures from the text above:
+
+- **Interim auth.** The M1 endpoints are guarded by one static bearer token (`auth.bootstrapToken`); with none configured every `/api/v1` request is refused. M2 replaces it with sessions and scoped keys.
+- **Quick add by URL (`{"url": …}`) is not in M1.** It returns `501 not_implemented`. The SSRF-safe fetcher lands with the M2 API work, because it is security-sensitive and wants the key and rate-limit machinery around it.
+- **On-demand variants** (`full.gif`, `full.webm`, …) and `/g/{id}` are M5; those names answer `404` until then, and the GIF object only lists the three stored variants.
+- **`GET /api/v1/gifs/{id}`** exists so quick add can be verified; list, search and the rest of section 8.3 are M2.
+- **Pre-decode checks** are three, not two: ffprobe limits (dimensions, duration, frame count), then a first-frame decode. `ffprobe` reads headers only, so a file with a plausible header and garbage inside would otherwise pass and fail later in the worker.
+- **Forced demuxers.** For GIF, MP4/MOV and Matroska/WebM the sniffed type picks ffmpeg's demuxer with `-f`, so a crafted file cannot select an exotic one (playlists, concat scripts).
+- **Alpha detection** looks at the alpha plane (`alphaextract` + `signalstats`), because ffmpeg decodes every GIF as `bgra` whether or not it has transparency.
+- **Sources of unfinished jobs** live in `work/`, not `tmp/` (which is wiped at start), so a restart resumes them. A failed item is dropped and replaced when the same bytes are uploaded again.
+- **Animated WebP input** depends on the ffmpeg build: ffmpeg 6.x decodes only the first frame, newer releases decode the animation. `doctor` does not check this yet.
+- Deferred to later milestones: pre-migration DB snapshots (M6), the "keep the smaller of re-encode and original" rule for video sources (M7 polish), `export`, `gc`, `user` and `key` subcommands.
 
 M0 to M6 are the "storage accessor" you asked for first. Packaging is kept working from M0 onward; M6 finishes and hardens it rather than starting it.
 
@@ -920,7 +940,7 @@ M0 to M6 are the "storage accessor" you asked for first. Packaging is kept worki
 | Telegram details change (limits, client code layout, plugin engines) | Deferred; everything marked **(verify)** is re-checked when that work starts |
 | SQLite write contention | One writer, short transactions, WAL; ingest work happens outside transactions |
 | Rust compile times slow the edit-run loop | Single crate, `cargo check` and `nextest` in the dev shell, the web UI runs on the Vite dev server against a running backend |
-| `.sqlx/` metadata drifts from the queries | CI runs `cargo sqlx prepare --check` |
+| A SQL typo only shows up at run time (no compile-time query checking) | Every query path is exercised by the integration tests; `sqlx` query macros can be adopted later if it proves worth the offline-metadata upkeep |
 
 **Confirmed by the owner (2026-11-12)**
 

@@ -1,0 +1,62 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      # The integration tests run real ffmpeg (libx264 and libwebp are needed).
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: cargo run -- doctor
+        env:
+          UNIGIF_DATA_DIR: ${{ runner.temp }}/unigif
+          UNIGIF_CACHE_DIR: ${{ runner.temp }}/unigif-cache
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build
+      - name: Initial JavaScript budget (150 kB gzipped)
+        run: |
+          total=0
+          for f in dist/assets/*.js; do total=$((total + $(gzip -9 -c "$f" | wc -c))); done
+          echo "gzipped JS: $total bytes"
+          test "$total" -le 150000
+
+  nix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v30
+      # Builds the package (which runs the cargo test suite) and every check.
+      - run: nix flake check --print-build-logs
+      - run: nix build --print-build-logs

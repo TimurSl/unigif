@@ -1,0 +1,46 @@
+[package]
+name = "unigif"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+description = "Self-hosted, hashtag-first GIF library with a scoped-key API and MP4 storage"
+license = "MIT"
+repository = "https://github.com/TimurSl/unigif"
+build = "build.rs"
+
+[dependencies]
+anyhow = "1"
+axum = { version = "0.8", features = ["multipart", "macros"] }
+base64 = "0.22"
+bytes = "1"
+bs58 = "0.5"
+clap = { version = "4", features = ["derive", "env"] }
+figment = { version = "0.10", features = ["toml", "env"] }
+futures-util = "0.3"
+infer = "0.19"
+rand = "0.9"
+rust-embed = "8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio", "migrate", "macros"] }
+subtle = "2"
+thiserror = "2"
+thumbhash = "0.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "fs", "signal", "sync", "time", "io-util"] }
+tokio-util = { version = "0.7", features = ["io"] }
+tower = { version = "0.5", features = ["util"] }
+time = { version = "0.3", features = ["formatting"] }
+tower-http = { version = "0.6", features = ["trace", "compression-gzip", "cors", "limit", "set-header"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+unicode-normalization = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
+http-body-util = "0.1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+strip = true

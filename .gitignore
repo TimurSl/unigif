@@ -1,0 +1,10 @@
+/target
+/result
+/result-*
+/web/node_modules
+/web/dist
+/.direnv
+*.db
+*.db-wal
+*.db-shm
+/data
