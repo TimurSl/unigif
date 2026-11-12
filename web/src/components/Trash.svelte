@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { restoreMany } from '../lib/actions';
-  import { app, onGifEvent, onResync, refreshTopTags, toast } from '../lib/app.svelte';
+  import { api } from '../lib/api';
+  import { app, errorText, onGifEvent, onResync, refreshStats, refreshTopTags, toast } from '../lib/app.svelte';
   import { Feed } from '../lib/feed.svelte';
   import { Selection } from '../lib/selection.svelte';
   import Grid from './Grid.svelte';
@@ -50,8 +51,33 @@
     else toast(`${n} ${n === 1 ? 'GIF' : 'GIFs'} restored`);
   }
 
+  // Emptying cannot be undone, so it takes two clicks and says how many go.
+  let confirming = $state(false);
+  let emptying = $state(false);
+  const inTrash = $derived(Math.max(app.stats?.trash ?? 0, feed.items.length));
+  const canDelete = $derived(app.me?.scopes.includes('delete') ?? false);
+
+  async function emptyTrash() {
+    emptying = true;
+    try {
+      const { purged } = await api.emptyTrash();
+      selection.clear();
+      await feed.reset();
+      await refreshStats();
+      refreshTopTags(true);
+      toast(`${purged} ${purged === 1 ? 'GIF' : 'GIFs'} deleted for good`);
+    } catch (e) {
+      toast(errorText(e), { kind: 'error' });
+    } finally {
+      emptying = false;
+      confirming = false;
+    }
+  }
+
   function onKey(e: KeyboardEvent) {
-    if (e.key === 'Escape' && selection.count > 0) selection.clear();
+    if (e.key !== 'Escape') return;
+    if (confirming) confirming = false;
+    else if (selection.count > 0) selection.clear();
   }
 </script>
 
@@ -61,6 +87,17 @@
   <div class="top">
     <h1>Trash</h1>
     <span class="muted">{app.stats?.trash ?? 0} in trash</span>
+    {#if canDelete && inTrash > 0}
+      <div class="empty-trash" data-testid="empty-trash">
+        {#if confirming}
+          <span class="ask" role="alert">Delete {inTrash} {inTrash === 1 ? 'GIF' : 'GIFs'} forever?</span>
+          <button class="btn" type="button" disabled={emptying} onclick={() => (confirming = false)}>Cancel</button>
+          <button class="btn danger" type="button" disabled={emptying} onclick={emptyTrash}>Delete forever</button>
+        {:else}
+          <button class="btn danger" type="button" onclick={() => (confirming = true)}>Empty trash</button>
+        {/if}
+      </div>
+    {/if}
   </div>
   <p class="note">Deleted GIFs stay here for a while, then are removed for good. Pick the ones to bring back.</p>
 
@@ -96,9 +133,21 @@
   }
   .top {
     display: flex;
+    flex-wrap: wrap;
     align-items: baseline;
-    gap: 12px;
+    gap: 8px 12px;
     padding: 12px 16px 0;
+  }
+  .empty-trash {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+  }
+  .ask {
+    font-size: 13px;
+    color: var(--text);
   }
   h1 {
     margin: 0;

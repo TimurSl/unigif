@@ -19,6 +19,11 @@ pub struct GifObject {
     pub height: Option<i64>,
     pub duration_ms: Option<i64>,
     pub has_alpha: bool,
+    /// Size of the file as it was added.
+    pub bytes_original: i64,
+    /// Whether that file is kept next to the MP4 (GIF, WebP and PNG sources
+    /// are, for the best image conversions and for transparency).
+    pub original_kept: bool,
     pub thumbhash: Option<String>,
     pub source: SourceObject,
     pub created_at: String,
@@ -105,6 +110,8 @@ impl GifObject {
             created_at: rfc3339(row.created_at),
             sorted_at: row.sorted_at.map(rfc3339),
             has_alpha: row.has_alpha != 0,
+            bytes_original: row.bytes_original,
+            original_kept: row.original_kept != 0,
             id: row.id,
             status: row.status,
             tags,

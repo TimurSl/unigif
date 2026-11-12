@@ -2,7 +2,8 @@
   import { onMount } from 'svelte';
   import { api, mediaPath, type Gif } from '../lib/api';
   import { canShare, copyText, formatUrl, pageUrl, shareGif, trashGif, type Format } from '../lib/actions';
-  import { errorText, onGifEvent } from '../lib/app.svelte';
+  import { emitGif, errorText, onGifEvent, toast } from '../lib/app.svelte';
+  import { formatBytes as size } from '../lib/format';
   import { closeGif, navigate, href } from '../lib/router.svelte';
   import Sorter from './Sorter.svelte';
 
@@ -62,7 +63,52 @@
     { id: 'webp', label: 'WebP' },
   ];
 
-  const size = (n: number) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} kB`);
+  function sizes(g: Gif): string {
+    const stored = `${size(g.media?.mp4?.bytes ?? 0)} stored`;
+    return g.bytes_original ? `${stored} · ${size(g.bytes_original)} original` : stored;
+  }
+
+  // The description doubles as alt text. Saved when the field loses focus or on Enter.
+  let description = $state('');
+  let savedDescription = '';
+  let savingDescription = $state(false);
+  $effect(() => {
+    const d = gif?.description ?? '';
+    if (d !== savedDescription) {
+      description = d;
+      savedDescription = d;
+    }
+  });
+
+  async function saveDescription() {
+    if (!gif) return;
+    const next = description.trim();
+    if (next === savedDescription) return;
+    savingDescription = true;
+    try {
+      const updated = await api.setDescription(gif.id, next);
+      savedDescription = updated.description ?? '';
+      description = savedDescription;
+      gif = updated;
+      emitGif('changed', updated);
+    } catch (e) {
+      toast(errorText(e), { kind: 'error' });
+    } finally {
+      savingDescription = false;
+    }
+  }
+
+  function descriptionKey(e: KeyboardEvent) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      (e.currentTarget as HTMLTextAreaElement).blur();
+    } else if (e.key === 'Escape') {
+      // Undo the edit instead of closing the dialog.
+      e.stopPropagation();
+      description = savedDescription;
+      (e.currentTarget as HTMLTextAreaElement).blur();
+    }
+  }
 </script>
 
 <svelte:window onkeydown={onKey} />
@@ -81,7 +127,7 @@
       <div class="body">
         <div class="player" style:aspect-ratio={gif.width && gif.height ? `${gif.width} / ${gif.height}` : undefined}>
           {#if src}
-            <video {src} autoplay muted loop playsinline controls></video>
+            <video {src} autoplay muted loop playsinline controls aria-label={gif.description || undefined}></video>
           {:else}
             <p class="status">{gif.status === 'failed' ? 'Could not be processed' : 'Processing…'}</p>
           {/if}
@@ -101,6 +147,21 @@
             </div>
           </section>
           <section>
+            <label class="desc">
+              <h3>Description</h3>
+              <textarea
+                bind:value={description}
+                onblur={saveDescription}
+                onkeydown={descriptionKey}
+                rows="2"
+                maxlength="2000"
+                placeholder="What happens in it (used as alt text)"
+                disabled={savingDescription}
+                data-testid="description"
+              ></textarea>
+            </label>
+          </section>
+          <section>
             <h3>Copy</h3>
             <div class="row wrap">
               {#if gif.media?.mp4}
@@ -117,7 +178,10 @@
             <dl>
               {#if gif.width && gif.height}<dt>Size</dt><dd>{gif.width} × {gif.height}</dd>{/if}
               {#if gif.duration_ms}<dt>Length</dt><dd>{(gif.duration_ms / 1000).toFixed(1)} s</dd>{/if}
-              {#if gif.media?.mp4}<dt>Stored</dt><dd>{size(gif.media.mp4.bytes)}</dd>{/if}
+              {#if gif.media?.mp4}
+                <dt>Stored</dt>
+                <dd data-testid="sizes">{sizes(gif)}</dd>
+              {/if}
               <dt>Source</dt><dd>{gif.source.type}</dd>
               <dt>Added</dt><dd>{new Date(gif.created_at).toLocaleString()}</dd>
             </dl>
@@ -251,6 +315,22 @@
   }
   dd {
     margin: 0;
+  }
+  .desc {
+    display: block;
+  }
+  .desc textarea {
+    display: block;
+    width: 100%;
+    min-height: 44px;
+    padding: 8px 10px;
+    resize: vertical;
+    background: var(--surface-2);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-control);
+    color: var(--text);
+    font: inherit;
+    font-size: 16px;
   }
   .danger-row {
     margin-top: auto;

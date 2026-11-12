@@ -489,3 +489,93 @@ async fn trashed_gifs_have_no_share_page() {
     assert_eq!(fetch(&h, &format!("/g/{id}")).await.0, StatusCode::NOT_FOUND);
     assert_eq!(fetch(&h, &format!("/g/{id}.gif")).await.0, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn emptying_the_trash_purges_files_and_cache_and_honours_hidden_hashtags() {
+    let h = Harness::new().await;
+    let a = wide(&h, 1).await["id"].as_str().unwrap().to_string();
+    let b = h.add_gif(2, "secret").await["id"].as_str().unwrap().to_string();
+    let keep = h.add_gif(3, "cat").await["id"].as_str().unwrap().to_string();
+    assert_eq!(fetch(&h, &format!("/m/{a}/full.gif")).await.0, StatusCode::OK);
+    for id in [&a, &b] {
+        assert_eq!(h.call("DELETE", &format!("/api/v1/gifs/{id}"), None).await.0, StatusCode::NO_CONTENT);
+    }
+
+    // Needs the delete scope.
+    let reader = h.mint(unigif::auth::Scopes::from_slice(&[unigif::auth::Scope::Read]), &[]).await;
+    let resp = h.send(h.req("POST", "/api/v1/gifs/trash/empty", Some(&reader), None)).await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // A key that cannot see #secret empties only what it can see.
+    let limited = h.mint(unigif::auth::Scopes::all(), &["secret"]).await;
+    let (s, v) = json(h.send(h.req("POST", "/api/v1/gifs/trash/empty", Some(&limited), None)).await).await;
+    assert_eq!((s, v["purged"].as_i64()), (StatusCode::OK, Some(1)));
+    assert!(unigif::db::gifs::get(&h.app.db, &a).await.unwrap().is_none());
+    assert!(!media_path(&h, &a, "full.mp4").exists(), "stored files go");
+    assert!(!h.app.cfg.cache_gif_dir(&a).exists(), "cached conversions go");
+    assert!(unigif::db::gifs::get(&h.app.db, &b).await.unwrap().is_some(), "hidden GIF untouched");
+
+    // The owner empties the rest; GIFs outside the trash are never touched.
+    let (s, v) = h.call("POST", "/api/v1/gifs/trash/empty", None).await;
+    assert_eq!((s, v["purged"].as_i64()), (StatusCode::OK, Some(1)));
+    let (_, st) = h.call("GET", "/api/v1/stats", None).await;
+    assert_eq!((st["gifs"].as_i64(), st["trash"].as_i64()), (Some(1), Some(0)));
+    assert!(media_path(&h, &keep, "full.mp4").exists());
+    // #secret only lived on a purged GIF, so the hashtag is gone too.
+    let (_, t) = h.call("GET", "/api/v1/tags", None).await;
+    let names: Vec<&str> =
+        t["items"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["cat"]);
+    // Nothing left: still a 200.
+    let (s, v) = h.call("POST", "/api/v1/gifs/trash/empty", None).await;
+    assert_eq!((s, v["purged"].as_i64()), (StatusCode::OK, Some(0)));
+}
+
+#[tokio::test]
+async fn clearing_the_cache_removes_every_converted_file() {
+    let h = Harness::new().await;
+    let id = wide(&h, 1).await["id"].as_str().unwrap().to_string();
+    let mut total = 0;
+    for name in ["full.gif", "full.webm"] {
+        let (s, _, body) = fetch(&h, &format!("/m/{id}/{name}")).await;
+        assert_eq!(s, StatusCode::OK);
+        total += body.len() as u64;
+    }
+    // A stray partial file stands in for a conversion in progress.
+    std::fs::write(cache_file(&h, &id, "full.webp.part"), b"half").unwrap();
+
+    // Admin only: a full-but-not-admin key is refused.
+    let full = h.mint(unigif::auth::Scopes::preset("full").unwrap(), &[]).await;
+    let resp = h.send(h.req("DELETE", "/api/v1/cache", Some(&full), None)).await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert!(cache_file(&h, &id, "full.gif").exists());
+
+    let (s, v) = h.call("DELETE", "/api/v1/cache", None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!((v["files"].as_u64(), v["bytes"].as_u64()), (Some(2), Some(total)));
+    assert!(!cache_file(&h, &id, "full.gif").exists());
+    assert!(!cache_file(&h, &id, "full.webm").exists());
+    assert!(cache_file(&h, &id, "full.webp.part").exists(), "work in progress is left alone");
+    let (_, st) = h.call("GET", "/api/v1/stats", None).await;
+    assert_eq!((st["cache_files"].as_i64(), st["cache_bytes"].as_i64()), (Some(0), Some(0)));
+    // Stored media is untouched, and the next request converts again.
+    assert_eq!(fetch(&h, &format!("/m/{id}/full.mp4")).await.0, StatusCode::OK);
+    assert_eq!(fetch(&h, &format!("/m/{id}/full.gif")).await.0, StatusCode::OK);
+    assert!(cache_file(&h, &id, "full.gif").exists());
+}
+
+#[tokio::test]
+async fn the_gif_object_reports_the_original_size() {
+    let h = Harness::new().await;
+    let bytes = gif(h.dir.path(), "o.gif", "96x64", 7);
+    let len = bytes.len() as i64;
+    let (s, v) = h.add("?wait=30", bytes).await;
+    assert_eq!(s, StatusCode::CREATED);
+    assert_eq!(v["bytes_original"].as_i64(), Some(len));
+    assert_eq!(v["original_kept"], false, "an opaque GIF is not kept by default");
+
+    let path = h.dir.path().join("alpha.gif");
+    transparent_gif_fixture(&path);
+    let (_, v) = h.add("?wait=60", std::fs::read(&path).unwrap()).await;
+    assert_eq!(v["original_kept"], true, "a transparent GIF is");
+}

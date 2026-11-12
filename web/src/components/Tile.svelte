@@ -103,6 +103,12 @@
   }
 
   $effect(() => () => clearTimeout(pressTimer));
+
+  // The description is the alt text when there is one; the hashtags follow it.
+  const label = $derived.by(() => {
+    const tags = gif.tags.length ? `tagged ${gif.tags.map((t) => '#' + t).join(' ')}` : 'without hashtags';
+    return gif.description ? `${gif.description}, ${tags}` : `GIF ${tags}`;
+  });
 </script>
 
 <div class="tile" class:selected role="presentation" onmouseenter={() => (hovering = true)} onmouseleave={() => (hovering = false)}>
@@ -111,7 +117,7 @@
     class="open"
     type="button"
     style:background-image={placeholder ? `url(${placeholder})` : undefined}
-    aria-label={gif.tags.length ? `GIF tagged ${gif.tags.map((t) => '#' + t).join(' ')}` : 'GIF without hashtags'}
+    aria-label={label}
     aria-pressed={selecting ? selected : undefined}
     onclick={click}
     onpointerdown={pressStart}

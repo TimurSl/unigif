@@ -141,6 +141,12 @@ async fn responses_match_their_schemas() {
     h.call("DELETE", &format!("/api/v1/gifs/{id}"), None).await;
     let (_, restored) = h.call("POST", &format!("/api/v1/gifs/{id}/restore"), None).await;
     validate("Gif", &restored);
+    let (s, emptied) = h.call("POST", "/api/v1/gifs/trash/empty", None).await;
+    assert_eq!(s, StatusCode::OK);
+    validate("TrashEmptied", &emptied);
+    let (s, cleared) = h.call("DELETE", "/api/v1/cache", None).await;
+    assert_eq!(s, StatusCode::OK);
+    validate("CacheCleared", &cleared);
 
     // Tags.
     let (_, t) = h.call("GET", "/api/v1/tags?sort=recent", None).await;

@@ -175,5 +175,5 @@ test('detail: copy a link in every format, open the share page, see the converte
   await page.keyboard.press('Escape');
   await page.goto('/settings');
   await expect(page.getByText(/Converted copies/)).toBeVisible();
-  await expect(page.getByText(/[1-9]\d* files, .* of 2\.0 GB/)).toBeVisible();
+  await expect(page.getByText(/[1-9]\d* files, .* of 2\.\d GB/)).toBeVisible();
 });

@@ -33,6 +33,19 @@ impl ByteSize {
     }
 }
 
+impl std::fmt::Display for ByteSize {
+    /// `512 B`, `1.5 MB`: decimal units, one decimal place above bytes.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let n = self.0 as f64;
+        match self.0 {
+            0..1_000 => write!(f, "{} B", self.0),
+            1_000..1_000_000 => write!(f, "{:.1} kB", n / 1e3),
+            1_000_000..1_000_000_000 => write!(f, "{:.1} MB", n / 1e6),
+            _ => write!(f, "{:.1} GB", n / 1e9),
+        }
+    }
+}
+
 impl<'de> Deserialize<'de> for ByteSize {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
@@ -432,6 +445,15 @@ mod tests {
     /// `Config::load` reads the process environment, and one test sets
     /// `UNIGIF_*` variables, so every test that loads must hold this lock.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn formats_sizes() {
+        assert_eq!(ByteSize(0).to_string(), "0 B");
+        assert_eq!(ByteSize(999).to_string(), "999 B");
+        assert_eq!(ByteSize(1_500).to_string(), "1.5 kB");
+        assert_eq!(ByteSize(2_100_000).to_string(), "2.1 MB");
+        assert_eq!(ByteSize(3_000_000_000).to_string(), "3.0 GB");
+    }
 
     #[test]
     fn parses_sizes() {

@@ -238,3 +238,108 @@ test('API keys: the secret is shown once, the key works, revoking stops it', asy
   expect((await api.get('/api/v1/gifs')).status()).toBe(401);
   await api.dispose();
 });
+
+test('detail view: the description is editable alt text, and sizes show stored against original', async ({ page }) => {
+  await login(page);
+  const g = (await allGifs(page)).find((x) => x.tags.includes('sidekick'))!;
+  await page.goto(`/?gif=${g.id}`);
+  const dialog = page.getByRole('dialog', { name: 'GIF details' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByTestId('sizes')).toHaveText(/\d+ (B|kB|MB) stored · \d+(\.\d)? (B|kB|MB) original/);
+
+  const field = dialog.getByTestId('description');
+  await field.fill('A test card scrolling sideways');
+  await field.press('Enter');
+  await expect
+    .poll(async () => (await (await page.request.get(`/api/v1/gifs/${g.id}`)).json()).description)
+    .toBe('A test card scrolling sideways');
+  // Escape inside the field undoes the edit and keeps the dialog open.
+  await field.fill('something else');
+  await field.press('Escape');
+  await expect(field).toHaveValue('A test card scrolling sideways');
+  await expect(dialog).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  // The tile is labelled with it.
+  await expect(page.getByRole('button', { name: /^A test card scrolling sideways, tagged/ })).toHaveCount(1);
+});
+
+test('trash: "Empty trash" says how many go, and deletes them for good', async ({ page }) => {
+  await login(page);
+  const victims = (await allGifs(page)).filter((g) => g.tags.includes('batch')).slice(0, 2);
+  for (const v of victims) {
+    expect((await page.request.delete(`/api/v1/gifs/${v.id}`, { headers: { 'X-Unigif-Request': '1' } })).status()).toBe(204);
+  }
+  await page.goto('/trash');
+  await expect(page.getByRole('button', { name: /tagged #/ })).toHaveCount(2);
+  const box = page.getByTestId('empty-trash');
+  await box.getByRole('button', { name: 'Empty trash' }).click();
+  await expect(box).toContainText('Delete 2 GIFs forever?');
+  // Cancel keeps everything.
+  await box.getByRole('button', { name: 'Cancel' }).click();
+  await expect(page.getByRole('button', { name: /tagged #/ })).toHaveCount(2);
+
+  await box.getByRole('button', { name: 'Empty trash' }).click();
+  await box.getByRole('button', { name: 'Delete forever' }).click();
+  await expect(page.getByText('2 GIFs deleted for good')).toBeVisible();
+  await expect(page.getByText('The trash is empty.')).toBeVisible();
+  await expect(page.getByTestId('empty-trash')).toHaveCount(0);
+  for (const v of victims) expect((await page.request.get(`/api/v1/gifs/${v.id}`)).status()).toBe(404);
+});
+
+test('settings: clear cache, list and revoke sessions, change the password', async ({ page, browser, baseURL }) => {
+  await login(page);
+  // Something in the cache: ask for a GIF conversion once.
+  const g = (await allGifs(page))[0];
+  expect((await page.request.get(`/m/${g.id}/full.gif`)).status()).toBe(200);
+
+  // A second device signs in.
+  const other = await browser.newContext({ baseURL });
+  const otherPage = await other.newPage();
+  await login(otherPage);
+
+  await page.goto('/settings');
+  await page.getByRole('button', { name: 'Clear cache' }).click();
+  await expect(page.getByText(/Cleared 1 converted file/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Clear cache' })).toBeDisabled();
+
+  const sessions = page.getByTestId('sessions');
+  await expect(sessions.getByText('This device')).toHaveCount(1);
+  const revokeButtons = sessions.getByRole('button', { name: 'Revoke' });
+  const before = await revokeButtons.count();
+  expect(before).toBeGreaterThanOrEqual(1);
+  // Revoke every other session: the second device is signed out.
+  for (let n = before; n > 0; n--) {
+    await revokeButtons.first().click();
+    await expect(revokeButtons).toHaveCount(n - 1);
+  }
+  expect((await otherPage.request.get('/api/v1/me')).status()).toBe(401);
+
+  // Change the password, check the old one no longer works, then change it back.
+  const form = page.getByTestId('password-form');
+  await form.getByLabel('Current password').fill('wrong-password');
+  await form.getByLabel('New password', { exact: true }).fill('e2e-password-2');
+  await form.getByLabel('Repeat new password').fill('e2e-password-3');
+  await expect(form.getByRole('alert')).toHaveText('The new passwords do not match.');
+  await expect(form.getByRole('button', { name: 'Change password' })).toBeDisabled();
+  await form.getByLabel('Repeat new password').fill('e2e-password-2');
+  await form.getByRole('button', { name: 'Change password' }).click();
+  await expect(form.getByRole('alert')).toHaveText('The current password is wrong.'); // the current password was wrong
+  await expect(page).toHaveURL(/\/settings$/); // and that is not a lost session
+
+  await form.getByLabel('Current password').fill('e2e-password-1');
+  await form.getByRole('button', { name: 'Change password' }).click();
+  await expect(page.getByText('Password changed. Every other device was signed out.')).toBeVisible();
+  const old = await otherPage.request.post('/api/v1/auth/login', { data: { username: 'e2e', password: 'e2e-password-1' } });
+  expect(old.status()).toBe(401);
+  expect((await page.request.get('/api/v1/me')).status()).toBe(200); // this session stays
+
+  await form.getByLabel('Current password').fill('e2e-password-2');
+  await form.getByLabel('New password', { exact: true }).fill('e2e-password-1');
+  await form.getByLabel('Repeat new password').fill('e2e-password-1');
+  await form.getByRole('button', { name: 'Change password' }).click();
+  await expect(form.getByLabel('Current password')).toHaveValue('');
+  const back = await otherPage.request.post('/api/v1/auth/login', { data: { username: 'e2e', password: 'e2e-password-1' } });
+  expect(back.status()).toBe(200);
+  await other.close();
+});

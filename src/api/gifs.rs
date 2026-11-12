@@ -467,6 +467,14 @@ pub async fn restore(
     Ok(Json(object(&app, row).await?))
 }
 
+/// `POST /gifs/trash/empty`: purge everything in the trash the caller can
+/// see, files and cached conversions included.
+pub async fn empty_trash(State(app): State<App>, Auth(p): Auth) -> Result<Json<serde_json::Value>, ApiError> {
+    p.require(Scope::Delete)?;
+    let purged = crate::janitor::empty_trash(&app, &p.visibility()).await?;
+    Ok(Json(json!({ "purged": purged })))
+}
+
 /// A GIF was sent somewhere: feeds `sort=used`.
 pub async fn use_gif(
     State(app): State<App>,

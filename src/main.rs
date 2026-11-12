@@ -44,6 +44,9 @@ enum Command {
         #[arg(long, default_value_t = 7)]
         keep: usize,
     },
+    /// Run the janitor once now: purge expired trash, end expired sessions,
+    /// trim the conversion cache to its limit.
+    Gc,
     /// Bulk-import a folder of GIFs and videos.
     Import {
         dir: PathBuf,
@@ -210,6 +213,18 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             let dir = dir.unwrap_or_else(|| backup::default_dir(&cfg.data_dir));
             let dest = backup::run(&db, &dir, keep).await?;
             println!("{}", dest.display());
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Gc => {
+            let app = start(cfg, false).await?;
+            let r = janitor::run_once(&app).await?;
+            println!(
+                "purged {} GIFs from the trash, ended {} expired sessions, evicted {} cached files ({})",
+                r.purged_gifs,
+                r.expired_sessions,
+                r.evicted_files,
+                unigif::config::ByteSize(r.evicted_bytes)
+            );
             Ok(ExitCode::SUCCESS)
         }
         Command::Import { dir, tags_from_folders } => {
