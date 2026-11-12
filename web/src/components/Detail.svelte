@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api, mediaPath, type Gif } from '../lib/api';
-  import { emitGif, errorText, onGifEvent, refreshStats, toast } from '../lib/app.svelte';
+  import { canShare, copyText, gifUrl, shareGif, trashGif } from '../lib/actions';
+  import { errorText, onGifEvent } from '../lib/app.svelte';
   import { closeGif, navigate, href } from '../lib/router.svelte';
   import Sorter from './Sorter.svelte';
 
@@ -38,48 +39,13 @@
   );
 
   const src = $derived(gif?.media?.mp4 ? mediaPath(gif.media.mp4.url) : null);
-  const absolute = (p: string) => new URL(p, location.href).href;
-
-  async function copy(label: string, text: string) {
-    try {
-      await navigator.clipboard.writeText(text);
-      toast(`${label} copied`);
-    } catch {
-      toast('Could not copy', { kind: 'error' });
-    }
-  }
-
   function showTag(tag: string) {
     closeGif();
     setTimeout(() => navigate(href('library', tag)), 0);
   }
 
   async function trash() {
-    if (!gif) return;
-    const g = gif;
-    try {
-      await api.trash(g.id);
-    } catch (e) {
-      toast(errorText(e), { kind: 'error' });
-      return;
-    }
-    emitGif('removed', g);
-    void refreshStats();
-    closeGif();
-    toast('Moved to trash', {
-      action: {
-        label: 'Undo',
-        run: () =>
-          api
-            .restore(g.id)
-            .then((r) => {
-              emitGif('added', r);
-              void refreshStats();
-            })
-            .catch((e) => toast(errorText(e), { kind: 'error' })),
-      },
-      ms: 5000,
-    });
+    if (gif && (await trashGif(gif))) closeGif();
   }
 
   function onKey(e: KeyboardEvent) {
@@ -131,8 +97,9 @@
             <h3>Copy</h3>
             <div class="row wrap">
               {#if gif.media?.mp4}
-                <button class="btn" type="button" onclick={() => copy('Link', absolute(mediaPath(gif!.media!.mp4!.url)))}>Link</button>
-                <button class="btn" type="button" onclick={() => copy('MP4 link', absolute(mediaPath(gif!.media!.mp4!.url)))}>MP4</button>
+                <button class="btn" type="button" onclick={() => copyText('Link', gifUrl(gif!)!)}>Link</button>
+                <button class="btn" type="button" onclick={() => copyText('MP4 link', gifUrl(gif!)!)}>MP4</button>
+                {#if canShare}<button class="btn" type="button" onclick={() => shareGif(gif!)}>Share</button>{/if}
               {/if}
             </div>
           </section>

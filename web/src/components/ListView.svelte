@@ -3,16 +3,20 @@
   import { type Gif } from '../lib/api';
   import { app, onGifEvent } from '../lib/app.svelte';
   import { Feed } from '../lib/feed.svelte';
-  import { href, navigate, openGif, route } from '../lib/router.svelte';
+  import { href, linkClick, navigate, openGif, route } from '../lib/router.svelte';
   import Grid from './Grid.svelte';
   import SearchBar from './SearchBar.svelte';
   import Sorter from './Sorter.svelte';
+  import TileMenu from './TileMenu.svelte';
 
   let { view, onupload }: { view: 'library' | 'unsorted'; onupload: () => void } = $props();
 
   let draft = $state('');
   let searchInput: HTMLInputElement | undefined = $state();
   let sorting: { startId?: string } | null = $state(null);
+  /** Phone: the long-press menu, and the tag sheet it can open for one GIF. */
+  let menu: Gif | null = $state(null);
+  let editing: Gif | null = $state(null);
 
   const chips = $derived(route.q.split(/\s+/).filter(Boolean));
   const query = $derived([...chips, ...(draft.trim() ? [draft.trim()] : [])].join(' '));
@@ -114,7 +118,16 @@
     </div>
   {/if}
 
-  <Grid items={feed.items} loading={feed.loading} done={feed.done} onopen={open} onend={() => void feed.more()}>
+  {#if view === 'library' && chips.length === 0 && !draft && app.topTags.length}
+    <!-- Phone: hashtag browsing lives under the search box (the sidebar is a tab bar there). -->
+    <nav class="hashtags" aria-label="Browse hashtags">
+      {#each app.topTags.slice(0, 40) as t (t.name)}
+        <a class="chip tag" href={href('library', t.name)} onclick={(e) => linkClick(e, href('library', t.name))}>#{t.name}</a>
+      {/each}
+    </nav>
+  {/if}
+
+  <Grid items={feed.items} loading={feed.loading} done={feed.done} onopen={open} onmenu={(g) => (menu = g)} onend={() => void feed.more()}>
     {#snippet empty()}
       {#if view === 'unsorted'}
         <p><strong>All sorted.</strong></p>
@@ -132,6 +145,12 @@
 
 {#if sorting}
   <Sorter mode="queue" startId={sorting.startId} onclose={() => (sorting = null)} />
+{/if}
+{#if menu}
+  <TileMenu gif={menu} onedit={(g) => (editing = g)} onclose={() => (menu = null)} />
+{/if}
+{#if editing}
+  <Sorter mode="edit" gif={editing} onclose={() => (editing = null)} />
 {/if}
 
 <style>
@@ -184,12 +203,46 @@
     color: var(--text);
     font: inherit;
   }
+  .hashtags {
+    display: none;
+  }
   @media (max-width: 639px) {
     .list {
-      height: calc(100dvh - 53px);
+      height: calc(100dvh - var(--tabbar-h));
+    }
+    .top {
+      padding: calc(8px + env(safe-area-inset-top)) 12px 8px;
     }
     .upload {
-      display: none;
+      display: none; /* the Add tab replaces it */
+    }
+    .sub {
+      padding: 0 12px 4px;
+    }
+    .hashtags {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding: 0 12px 8px;
+      scrollbar-width: none;
+    }
+    .hashtags .chip {
+      display: inline-flex;
+      align-items: center;
+      flex: none;
+      min-height: 36px;
+      padding: 0 14px;
+      border: 1px solid var(--border-strong);
+      border-radius: 999px;
+      color: var(--text);
+      font-size: 13px;
+      text-decoration: none;
+    }
+    .unsorted-head {
+      gap: 8px 12px;
+    }
+    .order {
+      margin-left: 0;
     }
   }
 </style>

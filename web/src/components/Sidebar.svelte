@@ -1,25 +1,32 @@
 <script lang="ts">
   import { app, logout } from '../lib/app.svelte';
-  import { href, navigate, route } from '../lib/router.svelte';
+  import { href, linkClick, route } from '../lib/router.svelte';
 
-  function go(e: MouseEvent, to: string) {
-    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
-    e.preventDefault();
-    navigate(to);
-  }
+  let { onadd }: { onadd: () => void } = $props();
 </script>
 
+<!-- Desktop: sidebar. Tablet: icon rail. Phone: bottom tab bar (Library, Unsorted, Add, Settings). -->
 <nav class="side" aria-label="Main">
-  <a class="brand" href="/" onclick={(e) => go(e, '/')}>unigif</a>
+  <a class="brand" href="/" onclick={(e) => linkClick(e, '/')}>unigif</a>
   <ul class="main">
     <li>
-      <a href="/" class:current={route.view === 'library' && !route.q} onclick={(e) => go(e, '/')}>Library</a>
+      <a class="tab" href="/" class:current={route.view === 'library' && !route.q} onclick={(e) => linkClick(e, '/')}>
+        <svg class="ico" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1.5" /><rect x="14" y="3" width="7" height="5" rx="1.5" /><rect x="14" y="12" width="7" height="9" rx="1.5" /><rect x="3" y="16" width="7" height="5" rx="1.5" /></svg>
+        <span>Library</span>
+      </a>
     </li>
     <li>
-      <a href="/unsorted" class:current={route.view === 'unsorted'} onclick={(e) => go(e, '/unsorted')}>
-        Unsorted
+      <a class="tab" href="/unsorted" class:current={route.view === 'unsorted'} onclick={(e) => linkClick(e, '/unsorted')}>
+        <svg class="ico" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 13h5l1.5 3h5L16 13h5" /><path d="M5.5 5h13L21 13v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-6z" /></svg>
+        <span>Unsorted</span>
         {#if app.stats && app.stats.unsorted > 0}<span class="badge" data-testid="unsorted-count">{app.stats.unsorted}</span>{/if}
       </a>
+    </li>
+    <li class="phone-only">
+      <button class="tab" type="button" onclick={onadd}>
+        <svg class="ico" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+        <span>Add</span>
+      </button>
     </li>
   </ul>
   {#if app.topTags.length}
@@ -28,10 +35,10 @@
       {#each app.topTags as t (t.name)}
         <li>
           <a
-            class="tag"
+            class="tab tag"
             href={href('library', t.name)}
             class:current={route.view === 'library' && route.q === t.name}
-            onclick={(e) => go(e, href('library', t.name))}
+            onclick={(e) => linkClick(e, href('library', t.name))}
           >
             <span>#{t.name}</span><span class="count">{t.gif_count}</span>
           </a>
@@ -40,8 +47,14 @@
     </ul>
   {/if}
   <div class="foot">
-    <span class="who">{app.me?.name}</span>
-    <button class="btn ghost" type="button" onclick={logout}>Sign out</button>
+    <a class="tab" href="/settings" class:current={route.view === 'settings'} onclick={(e) => linkClick(e, '/settings')}>
+      <svg class="ico" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10" /><circle cx="16" cy="7" r="2" /><circle cx="8" cy="17" r="2" /></svg>
+      <span>Settings</span>
+    </a>
+    <div class="account">
+      <span class="who">{app.me?.name}</span>
+      <button class="btn ghost" type="button" onclick={logout}>Sign out</button>
+    </div>
   </div>
 </nav>
 
@@ -71,23 +84,27 @@
     margin: 0;
     padding: 0;
   }
-  a {
+  .tab {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    width: 100%;
     min-height: 36px;
     padding: 0 12px;
+    border: 0;
     border-radius: var(--radius-control);
+    background: transparent;
     color: var(--text-muted);
     text-decoration: none;
   }
-  a:hover {
+  .tab:hover,
+  .tab.current {
     background: var(--surface-2);
     color: var(--text);
   }
-  a.current {
-    background: var(--surface-2);
-    color: var(--text);
+  .ico,
+  .phone-only {
+    display: none;
   }
   h2 {
     margin: 16px 12px 4px;
@@ -97,7 +114,7 @@
     text-transform: uppercase;
     color: var(--text-faint);
   }
-  .tags a {
+  .tags .tab {
     min-height: 32px;
     font-size: 13px;
   }
@@ -114,10 +131,15 @@
   .foot {
     margin-top: auto;
     display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .account {
+    display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 12px 4px 0 12px;
+    padding: 8px 4px 0 12px;
     border-top: 1px solid var(--border);
   }
   .who {
@@ -127,29 +149,32 @@
     color: var(--text-muted);
   }
 
+  /* Tablet: an icon rail. */
   @media (max-width: 1023px) and (min-width: 640px) {
     .side {
-      width: 64px;
+      width: 72px;
     }
     .brand,
     h2,
     .tags,
-    .who,
+    .account,
     .badge {
       display: none;
     }
-    .foot {
-      padding: 8px 0 0;
-      justify-content: center;
+    .ico {
+      display: block;
     }
-    a {
+    .tab {
+      flex-direction: column;
       justify-content: center;
+      gap: 2px;
+      min-height: 56px;
       padding: 0;
-      font-size: 12px;
+      font-size: 11px;
     }
   }
 
-  /* Phone: a bottom tab bar (the fuller mobile pass is milestone 4). */
+  /* Phone: a bottom tab bar. */
   @media (max-width: 639px) {
     .side {
       position: fixed;
@@ -158,9 +183,10 @@
       left: 0;
       right: 0;
       width: auto;
-      height: auto;
+      height: var(--tabbar-h);
       flex-direction: row;
-      padding: 4px 8px calc(4px + env(safe-area-inset-bottom));
+      gap: 0;
+      padding: 0 4px env(safe-area-inset-bottom);
       border-right: 0;
       border-top: 1px solid var(--border);
       overflow: visible;
@@ -168,26 +194,46 @@
     .brand,
     h2,
     .tags,
-    .who {
+    .account {
       display: none;
     }
     .main {
       display: flex;
-      flex: 1;
-      gap: 4px;
+      flex: 3;
     }
     .main li {
       flex: 1;
     }
-    .main a {
-      justify-content: center;
-      gap: 6px;
-      min-height: 44px;
-    }
     .foot {
       margin: 0;
+      flex: 1;
+    }
+    .phone-only {
+      display: block;
+    }
+    .ico {
+      display: block;
+    }
+    .tab {
+      position: relative;
+      flex-direction: column;
+      justify-content: center;
+      gap: 2px;
+      height: 100%;
+      min-height: 48px;
       padding: 0;
-      border: 0;
+      font-size: 11px;
+    }
+    .badge {
+      position: absolute;
+      top: 4px;
+      left: calc(50% + 6px);
+      padding: 0 6px;
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--on-accent);
+      font-size: 11px;
+      line-height: 16px;
     }
   }
 </style>

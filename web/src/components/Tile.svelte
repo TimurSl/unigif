@@ -1,9 +1,21 @@
 <script lang="ts">
   import { thumbHashToDataURL } from 'thumbhash';
+  import { copyText, gifUrl } from '../lib/actions';
   import { mediaPath, type Gif } from '../lib/api';
-  import { toast } from '../lib/app.svelte';
 
-  let { gif, onopen }: { gif: Gif; onopen: (g: Gif) => void } = $props();
+  let {
+    gif,
+    onopen,
+    onmenu,
+    animate = true,
+  }: {
+    gif: Gif;
+    onopen: (g: Gif) => void;
+    /** Long-press (touch). */
+    onmenu?: (g: Gif) => void;
+    /** False when the grid has used up its animation budget (phones): the tile shows its poster. */
+    animate?: boolean;
+  } = $props();
 
   const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -25,7 +37,7 @@
 
   const preview = $derived(gif.media?.preview_mp4 ? mediaPath(gif.media.preview_mp4.url) : null);
   const poster = $derived(gif.media?.poster ? mediaPath(gif.media.poster.url) : null);
-  const play = $derived(visible && preview !== null && (!reduceMotion || hovering));
+  const play = $derived(visible && animate && preview !== null && (!reduceMotion || hovering));
 
   $effect(() => {
     if (!el) return;
@@ -44,16 +56,48 @@
     }
   });
 
-  async function copyLink(e: MouseEvent | KeyboardEvent) {
+  function copyLink(e: MouseEvent | KeyboardEvent) {
     e.stopPropagation();
-    const url = gif.media?.mp4 ? new URL(mediaPath(gif.media.mp4.url), location.href).href : location.href;
-    try {
-      await navigator.clipboard.writeText(url);
-      toast('Link copied');
-    } catch {
-      toast('Could not copy the link', { kind: 'error' });
-    }
+    void copyText('Link', gifUrl(gif) ?? location.href);
   }
+
+  // Long-press (touch and pen only; a mouse has hover and right-click) opens the tile menu. A scroll or
+  // a drag past a few pixels cancels it, and the click that follows a long press must not open the tile.
+  const LONG_PRESS_MS = 450;
+  const MOVE_SLOP = 10;
+  let pressTimer: ReturnType<typeof setTimeout> | undefined;
+  let pressAt = { x: 0, y: 0 };
+  let pressedLong = false;
+  let touching = false;
+
+  function pressStart(e: PointerEvent) {
+    touching = e.pointerType !== 'mouse';
+    if (!touching || !onmenu) return;
+    pressedLong = false;
+    pressAt = { x: e.clientX, y: e.clientY };
+    clearTimeout(pressTimer);
+    pressTimer = setTimeout(() => {
+      pressedLong = true;
+      navigator.vibrate?.(10);
+      onmenu(gif);
+    }, LONG_PRESS_MS);
+  }
+  function pressMove(e: PointerEvent) {
+    if (pressTimer && Math.hypot(e.clientX - pressAt.x, e.clientY - pressAt.y) > MOVE_SLOP) pressEnd();
+  }
+  function pressEnd() {
+    clearTimeout(pressTimer);
+    pressTimer = undefined;
+  }
+  function click() {
+    if (pressedLong) {
+      pressedLong = false;
+      return;
+    }
+    onopen(gif);
+  }
+
+  $effect(() => () => clearTimeout(pressTimer));
 </script>
 
 <div class="tile" role="presentation" onmouseenter={() => (hovering = true)} onmouseleave={() => (hovering = false)}>
@@ -63,7 +107,12 @@
     type="button"
     style:background-image={placeholder ? `url(${placeholder})` : undefined}
     aria-label={gif.tags.length ? `GIF tagged ${gif.tags.map((t) => '#' + t).join(' ')}` : 'GIF without hashtags'}
-    onclick={() => onopen(gif)}
+    onclick={click}
+    onpointerdown={pressStart}
+    onpointermove={pressMove}
+    onpointerup={pressEnd}
+    onpointercancel={pressEnd}
+    oncontextmenu={(e) => touching && e.preventDefault()}
   >
     {#if gif.status === 'failed'}
       <span class="note">Could not be processed</span>
@@ -110,6 +159,9 @@
     border: 1px solid var(--border);
   }
   .open {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
     position: absolute;
     inset: 0;
     width: 100%;
@@ -179,6 +231,10 @@
   @media (hover: none) {
     .copy {
       display: none;
+    }
+    /* No hover on touch: the hashtags are always shown. */
+    .meta {
+      opacity: 1;
     }
   }
 </style>

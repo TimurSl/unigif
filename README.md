@@ -2,7 +2,7 @@
 
 A self-hosted, hashtag-first GIF library. Every GIF carries hashtags; new ones land in **Unsorted** and leave it the moment they get their first hashtag. GIFs are stored as small H.264 MP4s and served in whatever format a client needs, through a documented HTTP API with scoped keys.
 
-The full design is in [`PLAN.md`](PLAN.md). **Status:** milestones M0 (skeleton), M1 (storage core), M2 (auth and API) and M3 (web UI) are implemented; mobile polish and the rest follow the plan's milestone order.
+The full design is in [`PLAN.md`](PLAN.md). **Status:** milestones M0 (skeleton), M1 (storage core), M2 (auth and API), M3 (web UI) and M4 (mobile layout and installable PWA with an Android share target) are implemented; the rest follow the plan's milestone order.
 
 ## What works today
 

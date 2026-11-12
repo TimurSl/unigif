@@ -8,6 +8,7 @@
     done,
     onopen,
     onend,
+    onmenu,
     empty,
   }: {
     items: Gif[];
@@ -15,12 +16,24 @@
     done: boolean;
     onopen: (g: Gif) => void;
     onend: () => void;
+    /** Long-press on a tile (touch only). */
+    onmenu?: (g: Gif) => void;
     empty?: import('svelte').Snippet;
   } = $props();
 
   const GAP = 12;
+  /** On a phone at most this many tiles animate at once; the rest show posters (data use, battery). */
+  const PHONE_MAX_PLAYING = 6;
   const MIN_COL = 220;
   const BUFFER = 600;
+
+  const phoneQuery = matchMedia('(max-width: 639px)');
+  let phone = $state(phoneQuery.matches);
+  $effect(() => {
+    const on = () => (phone = phoneQuery.matches);
+    phoneQuery.addEventListener('change', on);
+    return () => phoneQuery.removeEventListener('change', on);
+  });
 
   let width = $state(0);
   let height = $state(0);
@@ -57,6 +70,14 @@
     return out;
   });
 
+  // The tiles that actually animate: those on screen, top to bottom and left to right, up to the cap.
+  const playing = $derived.by(() => {
+    if (!phone) return null; // no cap: every on-screen tile plays
+    const onScreen = visible.filter((i) => layout.boxes[i].y + layout.boxes[i].h > scrollTop && layout.boxes[i].y < scrollTop + height);
+    onScreen.sort((a, b) => layout.boxes[a].y - layout.boxes[b].y || layout.boxes[a].x - layout.boxes[b].x);
+    return new Set(onScreen.slice(0, PHONE_MAX_PLAYING));
+  });
+
   function maybeMore() {
     if (!scroller || loading || done) return;
     if (scroller.scrollTop + scroller.clientHeight > layout.total - 1200) onend();
@@ -88,7 +109,7 @@
       {#each visible as i (items[i].id)}
         {@const b = layout.boxes[i]}
         <div class="slot" style:transform="translate({b.x}px, {b.y}px)" style:width="{colW}px" style:height="{b.h}px">
-          <Tile gif={items[i]} {onopen} />
+          <Tile gif={items[i]} {onopen} {onmenu} animate={playing === null || playing.has(i)} />
         </div>
       {/each}
     </div>
@@ -103,6 +124,11 @@
     min-height: 0;
     overflow-y: auto;
     padding: 0 16px 16px;
+  }
+  @media (max-width: 639px) {
+    .scroller {
+      padding: 0 12px 12px;
+    }
   }
   .canvas {
     position: relative;

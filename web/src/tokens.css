@@ -18,6 +18,9 @@
   --radius-control: 6px;
   --radius-tile: 10px;
   --motion: 140ms ease-out;
+
+  /* Height of the phone tab bar, including the home-indicator inset. */
+  --tabbar-h: calc(56px + env(safe-area-inset-bottom));
 }
 
 * {
@@ -27,6 +30,7 @@
 html,
 body {
   margin: 0;
+  overscroll-behavior: none;
   background: var(--bg);
   color: var(--text);
   font: 14px/1.5 var(--font-ui);
@@ -111,4 +115,17 @@ kbd {
   border: 1px solid var(--border-strong);
   border-radius: 4px;
   color: var(--text-muted);
+}
+
+/* While a full-screen sheet is open nothing behind it may scroll (iOS scrolls the page when the keyboard opens). */
+html.sheet-open,
+html.sheet-open body {
+  overflow: hidden;
+}
+
+/* Touch devices: no hover, so the controls that hover reveals are always there, and targets are big enough. */
+@media (pointer: coarse) {
+  .btn {
+    min-height: 44px;
+  }
 }

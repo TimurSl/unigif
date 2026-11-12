@@ -2,6 +2,7 @@
   import { onMount, tick } from 'svelte';
   import { api, mediaPath, type Gif, type Tag } from '../lib/api';
   import { app } from '../lib/app.svelte';
+  import { swipe } from '../lib/gestures';
   import { MAX_TAGS, cleanDraft, normalizeTag, parseTags } from '../lib/hashtags';
 
   let {
@@ -245,7 +246,15 @@
 
   <div class="body">
     <div class="stage">
-      <div class="player" style:aspect-ratio={gif.width && gif.height ? `${gif.width} / ${gif.height}` : undefined}>
+      <div
+        class="player"
+        style:aspect-ratio={gif.width && gif.height ? `${gif.width} / ${gif.height}` : undefined}
+        use:swipe={{
+          left: mode === 'queue' ? onskip : undefined,
+          right: mode === 'queue' && canGoBack ? onprev : undefined,
+          down: onclose,
+        }}
+      >
         {#if src}
           <video {src} poster={poster ?? undefined} autoplay muted loop playsinline controlslist="nodownload"></video>
         {:else}
@@ -404,6 +413,7 @@
   .player {
     flex: 1;
     min-height: 200px;
+    touch-action: none; /* swipes are ours: left skips, right goes back, down closes */
     display: grid;
     place-items: center;
     padding: 16px;
@@ -579,6 +589,8 @@
     border-color: currentColor;
     opacity: 0.6;
   }
+  /* Phone (plan 9.5): full screen, GIF at most 40 % of the height, the input and Save pinned at the
+     bottom (the sheet itself ends above the keyboard; see lib/viewport.ts). */
   @media (max-width: 720px) {
     .sheet {
       height: 100%;
@@ -586,17 +598,100 @@
       border: 0;
       border-radius: 0;
     }
+    header {
+      padding-top: calc(4px + env(safe-area-inset-top));
+    }
+    header .btn {
+      min-width: 44px;
+      min-height: 44px;
+    }
     .body {
-      grid-template-columns: 1fr;
-      grid-template-rows: minmax(0, 40%) minmax(0, 1fr);
+      display: flex;
+      flex-direction: column;
     }
     .stage {
+      flex: 0 1 auto;
+      max-height: 40%;
       border-right: 0;
       border-bottom: 1px solid var(--border);
     }
+    .player {
+      min-height: 96px;
+      padding: 8px;
+    }
+    .nav {
+      padding: 4px;
+    }
+    .nav .btn {
+      min-height: 44px;
+      padding: 0 10px;
+    }
     .nav kbd,
-    header kbd {
+    header kbd,
+    footer kbd,
+    .same kbd {
       display: none;
+    }
+    .tagging {
+      flex: 1 1 0;
+      gap: 12px;
+      padding: 12px 12px 0;
+    }
+    h3 {
+      display: none; /* the chips speak for themselves, and the height is precious */
+    }
+    .recent {
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      margin: 0 -12px;
+      padding: 0 12px;
+      scrollbar-width: none;
+    }
+    .recent .chip {
+      flex: none;
+    }
+    .chip {
+      min-height: 40px;
+      padding: 0 14px;
+    }
+    .chip button {
+      min-width: 32px;
+      min-height: 32px;
+      margin-right: -6px;
+    }
+    .same {
+      margin-top: 4px;
+      min-height: 44px;
+    }
+    .box input {
+      min-height: 40px;
+    }
+    /* Suggestions flow under the input instead of floating over the pinned Save row. */
+    .field ul {
+      position: static;
+      margin-top: 6px;
+    }
+    li button {
+      min-height: 44px;
+    }
+    footer {
+      position: sticky;
+      bottom: 0;
+      margin: auto -12px 0;
+      padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+      background: var(--surface-1);
+      border-top: 1px solid var(--border);
+    }
+    footer .btn {
+      min-height: 44px;
+      min-width: 96px;
+    }
+    .check {
+      min-height: 44px;
+    }
+    .check input {
+      width: 22px;
+      height: 22px;
     }
   }
 </style>
