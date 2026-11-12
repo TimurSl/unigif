@@ -31,7 +31,8 @@ pub async fn open(path: &std::path::Path) -> Result<Db> {
         .synchronous(SqliteSynchronous::Normal)
         .foreign_keys(true)
         .busy_timeout(Duration::from_secs(5));
-    connect(opts).await
+    let backups = path.parent().map(crate::backup::default_dir);
+    connect(opts, backups.as_deref()).await
 }
 
 /// Start a transaction that will write.
@@ -52,9 +53,39 @@ pub async fn open_memory() -> Result<Db> {
     Ok(pool)
 }
 
-async fn connect(opts: SqliteConnectOptions) -> Result<Db> {
+async fn connect(opts: SqliteConnectOptions, backups: Option<&std::path::Path>) -> Result<Db> {
     let pool =
         SqlitePoolOptions::new().max_connections(8).connect_with(opts).await.context("opening database")?;
-    sqlx::migrate!("./migrations").run(&pool).await.context("running migrations")?;
+    let migrator = sqlx::migrate!("./migrations");
+    if let Some(dir) = backups {
+        // An existing database that is about to change shape gets a copy first.
+        // Failing to make it stops the start: an upgrade without a way back
+        // is not worth the risk.
+        if let Some(applied) = latest_applied_migration(&pool).await? {
+            if migrator.iter().any(|m| m.version > applied) {
+                let dest = crate::backup::before_migration(&pool, dir, applied)
+                    .await
+                    .context("snapshotting the database before migrating it")?;
+                tracing::info!("database snapshot before migration: {}", dest.display());
+            }
+        }
+    }
+    migrator.run(&pool).await.context("running migrations")?;
     Ok(pool)
+}
+
+/// The newest migration already applied, or `None` for a database that has
+/// never been migrated (a new file).
+async fn latest_applied_migration(pool: &Db) -> Result<Option<i64>> {
+    let has_table: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations'",
+    )
+    .fetch_one(pool)
+    .await?;
+    if has_table == 0 {
+        return Ok(None);
+    }
+    Ok(sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations WHERE success = 1")
+        .fetch_one(pool)
+        .await?)
 }

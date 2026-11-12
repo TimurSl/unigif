@@ -2,7 +2,7 @@
 
 A self-hosted, hashtag-first GIF library. Every GIF carries hashtags; new ones land in **Unsorted** and leave it the moment they get their first hashtag. GIFs are stored as small H.264 MP4s and served in whatever format a client needs, through a documented HTTP API with scoped keys.
 
-The full design is in [`PLAN.md`](PLAN.md). **Status:** milestones M0 (skeleton), M1 (storage core), M2 (auth and API), M3 (web UI), M4 (mobile layout and installable PWA with an Android share target) and M5 (on-demand GIF / WebM / WebP, cache, share page) are implemented; the rest follow the plan's milestone order.
+The full design is in [`PLAN.md`](PLAN.md). **Status:** milestones M0 (skeleton), M1 (storage core), M2 (auth and API), M3 (web UI), M4 (mobile layout and installable PWA with an Android share target), M5 (on-demand GIF / WebM / WebP, cache, share page) and M6 (NixOS module, backups, VM test) are implemented; the rest follow the plan's milestone order.
 
 ## What works today
 
@@ -13,7 +13,7 @@ The full design is in [`PLAN.md`](PLAN.md). **Status:** milestones M0 (skeleton)
 - **Auth:** the owner logs in with a password (Argon2id) and gets a `HttpOnly` session cookie; everything else uses scoped API keys (`read`, `upload`, `tag`, `delete`, `admin`) that can also hide hashtags (`deny_tags`), carry an expiry and a rate limit. Cookie writes are CSRF-protected, logins are throttled, keys are rate-limited with `RateLimit-*` headers.
 - **Web UI** (embedded in the binary, served at `/`): sign in, a virtualised masonry **Library** with hashtag search (`cat funny`, `-dog`; `/` focuses the box) and a hashtag sidebar, an **Unsorted** queue, and the **tag sheet** for sorting with the keyboard only: type a hashtag, `Space` makes a chip, `Tab` accepts a suggestion, `Enter` saves and moves to the next GIF, `Alt+1…9` toggles a recent hashtag, `Alt+0` repeats the last GIF's hashtags, `Alt+←/→` goes back or skips, `Shift+Delete` trashes (with Undo), `Esc` closes. Upload by button, drag and drop, or pasting a file or link; a detail view per GIF.
 - **Search** (the Search tab, `GET /api/v1/search`): look up GIFs at **KLIPY** and **GIPHY** (trending when the box is empty) and save any result to the library with one click, optionally with hashtags; without them it lands in Unsorted. The server makes the calls, so API keys never reach the browser. Enter them in **Settings → GIF search**, or in the config file. A result is added through the ordinary quick add by URL, so it is deduplicated (by content and by provider + id), size-limited and SSRF-checked like any other URL. **Tenor** is not offered: Google shut its developer API down on 30 June 2026.
-- **CLI:** `serve`, `doctor`, `import <dir> [--tags-from-folders]`, `user add|passwd`, `key create|list|revoke`.
+- **CLI:** `serve`, `doctor`, `backup [--dir D] [--keep N]`, `import <dir> [--tags-from-folders]`, `user add|passwd`, `key create|list|revoke`.
 
 ## Run it
 
@@ -33,6 +33,23 @@ With Nix (the flake builds the web UI and wraps ffmpeg for you):
 nix run          # throwaway instance in a temporary directory; log in as dev / dev-password
 nix develop      # dev shell with Rust, Node, ffmpeg, sqlx-cli, nextest
 nix build        # ./result/bin/unigif
+```
+
+## Deploy on NixOS
+
+The flake exports `nixosModules.default` (`services.unigif`): a hardened systemd service, an optional nginx virtual host with ACME, a database snapshot timer, and a `unigif-ctl` helper. A pre-migration snapshot is taken automatically. See [`docs/deployment.md`](docs/deployment.md).
+
+```nix
+{
+  imports = [ inputs.unigif.nixosModules.default ];
+  services.unigif = {
+    enable = true;
+    publicUrl = "https://gif.example.com";
+    nginx.enable = true;
+    backup.enable = true;
+    initialOwner = { username = "timur"; passwordFile = config.age.secrets.unigif-owner.path; };
+  };
+}
 ```
 
 Add a GIF:

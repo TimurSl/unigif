@@ -20,6 +20,8 @@
         default = unigif;
       });
 
+      nixosModules.default = import ./nix/module.nix self;
+
       overlays.default = final: _prev: {
         unigif = final.callPackage ./nix/package.nix { };
       };
@@ -63,11 +65,13 @@
         };
       });
 
-      formatter = forAllSystems (pkgs: pkgs.nixfmt-rfc-style);
+      formatter = forAllSystems (pkgs: pkgs.nixfmt);
 
       checks = forAllSystems (pkgs: {
         # Building the package runs the whole cargo test suite (real ffmpeg).
         package = self.packages.${pkgs.stdenv.hostPlatform.system}.unigif;
+        # Boots a NixOS VM with the module and nginx and drives the real service.
+        vm = import ./nix/vm-test.nix { inherit self pkgs; };
       });
     };
 }
