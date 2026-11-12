@@ -8,9 +8,14 @@
     onopen,
     onmenu,
     animate = true,
+    selecting = false,
+    selected = false,
   }: {
     gif: Gif;
-    onopen: (g: Gif) => void;
+    onopen: (g: Gif, e?: MouseEvent) => void;
+    /** Select mode: the tile shows a tick and a click toggles it. */
+    selecting?: boolean;
+    selected?: boolean;
     /** Long-press (touch). */
     onmenu?: (g: Gif) => void;
     /** False when the grid has used up its animation budget (phones): the tile shows its poster. */
@@ -89,24 +94,25 @@
     clearTimeout(pressTimer);
     pressTimer = undefined;
   }
-  function click() {
+  function click(e: MouseEvent) {
     if (pressedLong) {
       pressedLong = false;
       return;
     }
-    onopen(gif);
+    onopen(gif, e);
   }
 
   $effect(() => () => clearTimeout(pressTimer));
 </script>
 
-<div class="tile" role="presentation" onmouseenter={() => (hovering = true)} onmouseleave={() => (hovering = false)}>
+<div class="tile" class:selected role="presentation" onmouseenter={() => (hovering = true)} onmouseleave={() => (hovering = false)}>
   <button
     bind:this={el}
     class="open"
     type="button"
     style:background-image={placeholder ? `url(${placeholder})` : undefined}
     aria-label={gif.tags.length ? `GIF tagged ${gif.tags.map((t) => '#' + t).join(' ')}` : 'GIF without hashtags'}
+    aria-pressed={selecting ? selected : undefined}
     onclick={click}
     onpointerdown={pressStart}
     onpointermove={pressMove}
@@ -143,9 +149,15 @@
       <span class="tags tag">{gif.tags.map((t) => '#' + t).join(' ')}</span>
     </div>
   {/if}
+  {#if selecting}
+    <span class="tick" class:on={selected} aria-hidden="true">
+      {#if selected}<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5 9-10" /></svg>{/if}
+    </span>
+  {:else}
   <button class="copy" type="button" aria-label="Copy link" onclick={copyLink}>
     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>
   </button>
+  {/if}
 </div>
 
 <style>
@@ -221,6 +233,28 @@
     background: rgb(10 10 10 / 0.8);
     opacity: 0;
     transition: opacity var(--motion);
+  }
+  .tile.selected {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+  .tick {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    width: 24px;
+    height: 24px;
+    display: grid;
+    place-items: center;
+    border: 2px solid var(--text);
+    border-radius: 999px;
+    background: rgb(10 10 10 / 0.6);
+    pointer-events: none;
+  }
+  .tick.on {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--on-accent);
   }
   .tile:hover .meta,
   .tile:hover .copy,

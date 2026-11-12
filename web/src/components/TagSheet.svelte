@@ -53,6 +53,30 @@
   const src = $derived(gif.media?.mp4 ? mediaPath(gif.media.mp4.url) : null);
   const poster = $derived(gif.media?.poster ? mediaPath(gif.media.poster.url) : null);
 
+  // Hashtags that most often sit next to the ones already chosen ("often with"), re-asked as the chips change.
+  let related: Tag[] = $state([]);
+  const often = $derived(related.filter((t) => !chips.includes(t.name)).slice(0, 8));
+  let relatedTimer: ReturnType<typeof setTimeout> | undefined;
+  let relatedSeq = 0;
+  $effect(() => {
+    const selected = chips.slice();
+    clearTimeout(relatedTimer);
+    if (selected.length === 0) {
+      related = [];
+      return;
+    }
+    const mine = ++relatedSeq;
+    relatedTimer = setTimeout(async () => {
+      try {
+        const s = await api.suggest(selected, 12);
+        if (mine === relatedSeq) related = s.related;
+      } catch {
+        /* suggestions are optional */
+      }
+    }, 120);
+    return () => clearTimeout(relatedTimer);
+  });
+
   let timer: ReturnType<typeof setTimeout> | undefined;
   let seq = 0;
   $effect(() => {
@@ -297,6 +321,17 @@
           </button>
         {/if}
       </section>
+
+      {#if often.length}
+        <section aria-label="Often with these hashtags">
+          <h3>Often with {chips.map((c) => '#' + c).join(' ')}</h3>
+          <div class="recent" data-testid="often-with">
+            {#each often as t (t.name)}
+              <button type="button" class="chip tag" onclick={() => toggle(t.name)}>#{t.name}</button>
+            {/each}
+          </div>
+        </section>
+      {/if}
 
       <div class="field" class:shake>
         <div class="box">

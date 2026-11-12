@@ -257,3 +257,46 @@ test('phone: the tab bar has Library, Unsorted, Search, Add and Settings; Settin
   await page.getByRole('button', { name: 'Sign out' }).tap();
   await expect(page).toHaveURL(/\/login$/);
 });
+
+test('phone: long-press → Select, tick more tiles, add a hashtag to all; the new pages fit the screen', async ({ page }) => {
+  await login(page);
+  const tiles = page.getByRole('button', { name: /^GIF tagged/ });
+  expect(await tiles.count()).toBeGreaterThanOrEqual(2);
+
+  await longPress(page, tiles.first());
+  await page.getByRole('dialog', { name: /Actions for/ }).getByRole('button', { name: 'Select', exact: true }).tap();
+  await expect(page.getByTestId('selected-count')).toHaveText('1 selected');
+  await tiles.nth(1).tap();
+  await expect(page.getByTestId('selected-count')).toHaveText('2 selected');
+
+  // The bar sits above the tab bar and its buttons are touch-sized.
+  const bar = page.getByRole('toolbar', { name: 'Selected GIFs' });
+  const tab = (await tabBar(page).boundingBox())!;
+  const barBox = (await bar.boundingBox())!;
+  expect(barBox.y + barBox.height).toBeLessThanOrEqual(tab.y + 1);
+  expect((await bar.getByRole('button', { name: 'Add hashtags' }).boundingBox())!.height).toBeGreaterThanOrEqual(44);
+
+  await bar.getByRole('button', { name: 'Add hashtags' }).tap();
+  await expect(page.getByRole('dialog', { name: 'Add hashtags to selected GIFs' })).toBeVisible();
+  await page.keyboard.type('picked');
+  await page.keyboard.press('Enter');
+  await expect(page.getByText('Added to 2 GIFs')).toBeVisible();
+  await expect
+    .poll(async () => (await tagsOf(page)).filter((t) => t.split(' ').includes('picked')).length)
+    .toBe(2);
+
+  // Settings leads to the new pages, and none of them scrolls sideways.
+  await tabBar(page).getByRole('link', { name: 'Settings' }).tap();
+  for (const [link, heading] of [
+    ['Hashtags', 'Hashtags'],
+    ['Trash', 'Trash'],
+    ['API keys', 'API keys'],
+  ] as const) {
+    await page.getByTestId('manage-card').getByRole('link', { name: link, exact: true }).tap();
+    await expect(page.getByRole('heading', { name: heading, exact: true })).toBeVisible();
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(0);
+    await page.goBack();
+    await expect(page.getByTestId('manage-card')).toBeVisible();
+  }
+});

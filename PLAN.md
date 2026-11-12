@@ -2,7 +2,7 @@
 
 A self-hosted, hashtag-first GIF library with a scoped-key API, MP4-based storage, a keyboard-driven sorting flow, a mobile UI, and first-class NixOS packaging. Built so that Telegram clients, bots, and your own social network can use it as a GIF provider.
 
-Status: **M0 to M6 are implemented** (see section 13 for what that covers and where the code departs from this text). Stack, media visibility, tenancy, originals policy, and licence are confirmed by the owner (section 14). Items marked **(verify)** are facts I could not fully confirm during research and must be checked when that part is built.
+Status: **M0 to M7 are implemented** (see section 13 for what that covers and where the code departs from this text). Stack, media visibility, tenancy, originals policy, and licence are confirmed by the owner (section 14). Items marked **(verify)** are facts I could not fully confirm during research and must be checked when that part is built.
 
 ---
 
@@ -891,11 +891,11 @@ Sizes are relative (S / M / L), not time estimates.
 | M4 ✅ | **Mobile and PWA**: responsive layout, bottom bar, full-screen tag sheet, gestures, installable, Android share target | M | The same sorting test passes in a phone viewport; a shared GIF lands in Unsorted |
 | M5 ✅ | **Conversion**: on-demand GIF / WebM / WebP, cache with eviction, share page with OpenGraph, storage stats | M | `full.gif` is generated once and served from cache after; the cache stays under its limit |
 | M6 ✅ | **NixOS**: module, hardening, nginx integration, backup timer, VM test, deployment guide | M | The VM test in 10.4 passes; the service runs on the VPS |
-| M7 | **Polish**: hashtag management (rename, merge), trash, batch select, co-occurrence suggestions, live updates over SSE, API key screen refinements | M | Renaming or merging a hashtag updates every GIF; a GIF added through the API appears in an open Unsorted tab without a reload |
+| M7 ✅ | **Polish**: hashtag management (rename, merge), trash, batch select, co-occurrence suggestions, live updates over SSE, API key screen refinements | M | Renaming or merging a hashtag updates every GIF; a GIF added through the API appears in an open Unsorted tab without a reload |
 
-### 13.1 Implementation notes (M0 to M6)
+### 13.1 Implementation notes (M0 to M7)
 
-Built in this order, and verified by `cargo test` (46 unit tests and 68 integration tests, with real ffmpeg), `cargo clippy -D warnings`, a curl run against the real binary, `nix build`, and for M3 to M5 `svelte-check` plus the Playwright suite in `web/e2e`.
+Built in this order, and verified by `cargo test` (46 unit tests and 68 integration tests, with real ffmpeg; M7 changed no server code), `cargo clippy -D warnings`, a curl run against the real binary, `nix build`, and for M3 to M5 `svelte-check` plus the Playwright suite in `web/e2e`.
 
 **M0, skeleton: done.** MIT `LICENSE`, `Cargo.toml`, flake (`packages`, `overlays`, `devShells`, `apps` for `nix run`, `formatter`, `checks`), `.github/workflows/ci.yml` (Rust, web with a 150 kB JS budget, Nix), Svelte 5 + Vite shell embedded with `rust-embed`, and a `build.rs` that creates `web/dist` so a plain `cargo build` works before the UI has been built.
 
@@ -970,6 +970,18 @@ Built in this order, and verified by `cargo test` (46 unit tests and 68 integrat
 - **Verified here without KVM.** This environment has no `/dev/kvm`, so the test was run with `--option system-features "kvm nixos-test ..."`, which lets QEMU fall back to emulation. The encoder preset is left at the default, so the size check is realistic, and the test polls until the GIF is ready. CI enables KVM on the runner.
 - **Not done.** `aarch64-linux` was evaluated, not built. A deployment on the real VPS is the owner's step: `docs/deployment.md` is the guide.
 
+**M7, polish: done**, with these departures from the text above. The server already had the endpoints (rename, merge, delete, batch, trash listing, suggestions, the event stream) from M2, so M7 is the web UI on top of them, and no server code changed.
+
+- **Live updates** (`lib/live.ts`): one `EventSource` on `/events`, opened after sign-in and closed on sign-out. Events are coalesced for 150 ms, then each changed GIF is fetched once and fed into the same notifications the UI uses for its own edits (`added`, `changed`, `removed`), so open lists, the Unsorted badge, the hashtag sidebar and the stats follow without a reload. A burst of more than 40 GIFs, a `resync` event, or a reconnect after the connection dropped reloads the lists instead. A change this tab made itself (batch actions, restore) is muted for four seconds so it is not fetched twice. A GIF edited elsewhere that no longer matches the hashtag chips of an open Library search leaves that list; one that newly matches is not inserted (its position would be a guess), so a reload shows it.
+- **Batch select** (Library and Unsorted): the Select button, Ctrl or Cmd click, or "Select" in the phone's long-press menu starts it; a click toggles a tile, Shift-click ticks a range, "Select all loaded" ticks what is loaded, Esc or Done ends it. The bar offers Add hashtags, Remove hashtags (the hashtags the selected GIFs carry, with counts) and Move to trash with a six-second Undo. Requests go out 500 ids at a time (the server's limit; one request is all-or-nothing, several are not). Tiles show a tick, and long-press is off while selecting.
+- **Hashtags page** (`/tags`, "Manage" next to the sidebar heading and a link in Settings, which is how a phone gets there): filter, three orders, inline Rename, Merge and Delete (asks first, and says how many GIFs are touched). Renaming onto an existing name shows the server's `409` with a "Merge into it instead" button. The page says so and hides the buttons for a sign-in without the tag scope or with hidden hashtags, which the server refuses anyway.
+- **Trash** (`/trash`): a grid where every tile is selectable and Restore brings them back (six requests at a time). Not done: "Empty trash" from 9.6. There is no endpoint that purges on demand (only the janitor does, after `trash.retentionDays`), and I did not add one beyond the section 8.3 table without asking.
+- **Co-occurrence suggestions**: the tag sheet shows "Often with #a #b" under Recent once a hashtag is chosen, from `GET /tags/suggest` (the GIFs that have all chosen hashtags, counted per other hashtag), re-asked 120 ms after the chips change.
+- **API keys** (`/keys`, from Settings): the list (last used, expiry, rate limit, hidden hashtags, a revoked toggle), a create form with the four presets spelled out in words, hidden hashtags, expiry and rate limit, edit (name, preset, hidden hashtags) and revoke after a confirmation. The new key is shown once with "Copy key" and "Copy curl example"; it is held only in that component's memory, and the e2e test checks that a reload does not contain it.
+- **Layout fix found by the e2e run**: a fixed-height grid page squeezed an `overflow: hidden` list below its content and clipped the row buttons; `grid-auto-rows: max-content` fixes it on the two new list pages.
+- **Tests.** `web/e2e/manage.spec.ts` (own server, port 8796) covers: a GIF added by an uploader key appears in an open Unsorted tab and leaves when tagged elsewhere; batch add, remove and trash with undo, including Shift-click ranges; a clashing rename turned into a merge, a rename and a delete, each checked through the API; trash and restore; "Often with"; a key is created, used, hidden hashtags honoured, revoked, and its secret is gone after a reload. `mobile.spec.ts` gained a phone test: long-press, Select, a bar above the tab bar with 44 px buttons, batch add, and no sideways scroll on the three new pages. The whole Playwright suite is 21 tests, all passing; `svelte-check` is clean and the initial JavaScript is about 49 kB gzipped against the 150 kB budget.
+- Not done, and still open: the "keep the smaller of re-encode and original" rule for video sources and the `export` and `gc` subcommands (both listed as deferred in the M1 notes; M7's table row did not include them), "Empty trash", batch select on third-party search results, drag-to-select, and a "convert now" warm-up (M5). Real-device checks on iOS remain the owner's.
+
 ### Third-party search (added after M5)
 
 - **Providers.** KLIPY and GIPHY, via `src/search`. Tenor is left out: its developer API closed on 30 June 2026. The server calls the providers (keys never reach the browser) and normalises each result to `{id, title, width, height, preview{url, kind}, download{url, format, bytes}, page_url}`. The download is the original GIF, or the MP4 when the GIF is over `upload.maxSize`.
@@ -978,7 +990,7 @@ Built in this order, and verified by `cargo test` (46 unit tests and 68 integrat
 - **CSP.** `img-src` and `media-src` now allow `https:`, because previews load straight from the providers' CDNs.
 - **Not verified against the live APIs.** The response shapes were written from the providers' public descriptions without access to their documentation or a key from this environment; check a real search with each key and adjust `parse_giphy` / `parse_klipy` if a field differs.
 
-M0 to M6 are the "storage accessor" you asked for first.
+M0 to M6 are the "storage accessor" you asked for first; M7 is the polish on top.
 
 **Later, not scheduled**: Telegram integration (section 11), a Tenor/Klipy-shaped adapter, and wiring Unigif into the social network as its GIF provider.
 

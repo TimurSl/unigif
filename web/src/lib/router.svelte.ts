@@ -2,7 +2,7 @@
 // on top of the current list, addressed by `?gif=<id>`, so the list underneath keeps its place.
 
 export interface Route {
-  view: 'library' | 'unsorted' | 'search' | 'settings' | 'login';
+  view: 'library' | 'unsorted' | 'search' | 'settings' | 'tags' | 'trash' | 'keys' | 'login';
   q: string;
   /** Search view only: the provider being searched. */
   provider: string;
@@ -12,15 +12,8 @@ export interface Route {
 function parse(): Route {
   const params = new URLSearchParams(location.search);
   const path = location.pathname;
-  const view = path.startsWith('/unsorted')
-    ? 'unsorted'
-    : path.startsWith('/search')
-      ? 'search'
-      : path.startsWith('/settings')
-      ? 'settings'
-      : path.startsWith('/login')
-        ? 'login'
-        : 'library';
+  const first = path.split('/')[1] ?? '';
+  const view = (['unsorted', 'search', 'settings', 'tags', 'trash', 'keys', 'login'] as const).find((v) => v === first) ?? 'library';
   return { view, q: params.get('q') ?? '', provider: params.get('provider') ?? '', gif: params.get('gif') };
 }
 
@@ -32,7 +25,7 @@ function sync() {
 window.addEventListener('popstate', sync);
 
 export function href(view: Route['view'], q = ''): string {
-  const base = view === 'unsorted' ? '/unsorted' : view === 'search' ? '/search' : view === 'settings' ? '/settings' : view === 'login' ? '/login' : '/';
+  const base = view === 'library' ? '/' : `/${view}`;
   return q ? `${base}?q=${encodeURIComponent(q)}` : base;
 }
 
