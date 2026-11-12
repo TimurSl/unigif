@@ -40,6 +40,15 @@ writeFileSync(join(dir, 'password'), 'e2e-password-1\n');
 const add = spawnSync(bin, ['user', 'add', 'e2e', '--password-file', join(dir, 'password')], { env, stdio: 'inherit' });
 if (add.status !== 0) throw new Error('could not create the e2e user');
 
+// The scale suite: 50 000 GIF rows (no media files), the same seed as tests/scale.rs.
+if (process.env.E2E_SEED_SCALE) {
+  const { DatabaseSync } = await import('node:sqlite');
+  const db = new DatabaseSync(join(dir, 'data', 'unigif.db'));
+  db.exec(readFileSync(join(root, 'tests', 'scale', 'seed.sql'), 'utf8'));
+  db.close();
+  console.log('seeded 50 000 GIFs');
+}
+
 // The search suite talks to a stand-in for GIPHY (a real one needs a key and the internet).
 if (process.env.E2E_PROVIDER) {
   const mockPort = Number(port) + 100;

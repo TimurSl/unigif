@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api, mediaPath, type Gif } from '../lib/api';
-  import { canShare, copyText, formatUrl, pageUrl, shareGif, trashGif, type Format } from '../lib/actions';
+  import { canShare, copyGif, formatUrl, pageUrl, shareGif, trashGif, type Format } from '../lib/actions';
   import { emitGif, errorText, onGifEvent, toast } from '../lib/app.svelte';
   import { formatBytes as size } from '../lib/format';
   import { closeGif, navigate, href } from '../lib/router.svelte';
@@ -165,9 +165,9 @@
             <h3>Copy</h3>
             <div class="row wrap">
               {#if gif.media?.mp4}
-                <button class="btn" type="button" onclick={() => copyText('Share link', pageUrl(gif!))}>Link</button>
+                <button class="btn" type="button" onclick={() => copyGif(gif!, 'Share link', pageUrl(gif!))}>Link</button>
                 {#each formats as f (f.id)}
-                  <button class="btn" type="button" onclick={() => copyText(`${f.label} link`, formatUrl(gif!, f.id)!)}>{f.label}</button>
+                  <button class="btn" type="button" onclick={() => copyGif(gif!, `${f.label} link`, formatUrl(gif!, f.id)!, f.id)}>{f.label}</button>
                 {/each}
                 {#if canShare}<button class="btn" type="button" onclick={() => shareGif(gif!)}>Share</button>{/if}
               {/if}

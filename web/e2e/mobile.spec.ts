@@ -261,7 +261,7 @@ test('phone: the tab bar has Library, Unsorted, Search, Add and Settings; Settin
 test('phone: long-press → Select, tick more tiles, add a hashtag to all; the new pages fit the screen', async ({ page }) => {
   await login(page);
   const tiles = page.getByRole('button', { name: /^GIF tagged/ });
-  expect(await tiles.count()).toBeGreaterThanOrEqual(2);
+  await expect(tiles.nth(1)).toBeVisible(); // the grid loads after sign-in
 
   await longPress(page, tiles.first());
   await page.getByRole('dialog', { name: /Actions for/ }).getByRole('button', { name: 'Select', exact: true }).tap();
@@ -299,4 +299,22 @@ test('phone: long-press → Select, tick more tiles, add a hashtag to all; the n
     await page.goBack();
     await expect(page.getByTestId('manage-card')).toBeVisible();
   }
+});
+
+test('phone, reduced motion: tiles show posters, the first tap plays, the second opens', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await login(page);
+  const tile = page.getByRole('button', { name: /^GIF / }).first();
+  await expect(tile).toBeVisible();
+  const video = tile.locator('video');
+  // Nothing plays on its own.
+  await page.waitForTimeout(500);
+  expect(await video.evaluate((v: HTMLVideoElement) => v.paused)).toBe(true);
+
+  await tile.tap();
+  await expect.poll(() => video.evaluate((v: HTMLVideoElement) => !v.paused)).toBe(true);
+  await expect(page.getByRole('dialog', { name: 'GIF details' })).toHaveCount(0);
+
+  await tile.tap();
+  await expect(page.getByRole('dialog', { name: 'GIF details' })).toBeVisible();
 });

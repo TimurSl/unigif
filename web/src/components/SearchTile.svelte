@@ -5,11 +5,18 @@
     item,
     status,
     onadd,
+    selecting = false,
+    selected = false,
+    ontoggle,
   }: {
     item: SearchItem;
     /** `idle`, `adding`, `added` (new in the library) or `have` (it was already there). */
     status: 'idle' | 'adding' | 'added' | 'have';
     onadd: (item: SearchItem) => void;
+    /** Select mode: a click ticks the result instead of saving it. */
+    selecting?: boolean;
+    selected?: boolean;
+    ontoggle?: (item: SearchItem, e: MouseEvent) => void;
   } = $props();
 
   const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -19,8 +26,9 @@
   let hovering = $state(false);
 
   const label = $derived(
-    status === 'added' ? 'Added' : status === 'have' ? 'In library' : status === 'adding' ? 'Adding…' : 'Add',
+    status === 'added' ? 'Added' : status === 'have' ? 'In library' : status === 'adding' ? 'Adding…' : selecting ? 'Select' : 'Add',
   );
+  const picking = $derived(selecting && status === 'idle');
   const play = $derived(visible && (!reduceMotion || hovering));
   let video: HTMLVideoElement | undefined = $state();
 
@@ -57,14 +65,17 @@
   <button
     class="add"
     class:done={status === 'added' || status === 'have'}
+    class:picking
+    class:selected={picking && selected}
     type="button"
     disabled={status !== 'idle'}
     aria-label={item.title ? `${label}: ${item.title}` : label}
+    aria-pressed={picking ? selected : undefined}
     data-state={status}
-    onclick={() => onadd(item)}
+    onclick={(e) => (picking ? ontoggle?.(item, e) : onadd(item))}
   >
     <span class="pill">
-      {#if status === 'added' || status === 'have'}
+      {#if status === 'added' || status === 'have' || (picking && selected)}
         ✓
       {:else if status === 'adding'}
         …
@@ -130,6 +141,14 @@
   .add[data-state='adding'] .pill {
     opacity: 1;
   }
+  .add.picking .pill {
+    opacity: 1;
+  }
+  .add.selected {
+    box-shadow: inset 0 0 0 3px var(--accent);
+    border-radius: var(--radius-tile);
+  }
+  .add.selected .pill,
   .add.done .pill {
     background: var(--accent);
     border-color: var(--accent);

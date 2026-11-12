@@ -162,3 +162,66 @@ async fn health_and_spa_fallback() {
     let resp = h.send(Request::get("/missing.js").body(Body::empty()).unwrap()).await;
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn private_media_needs_a_login_or_a_read_key_and_honours_hidden_hashtags() {
+    let h = Harness::with(|c| c.media.public = false).await;
+    let open = h.add_gif(1, "cat").await["id"].as_str().unwrap().to_string();
+    let secret = h.add_gif(2, "secret").await["id"].as_str().unwrap().to_string();
+    let get = |uri: String, auth: Option<(&'static str, String)>| {
+        let mut b = Request::get(uri);
+        if let Some((k, v)) = auth {
+            b = b.header(k, v);
+        }
+        b.body(Body::empty()).unwrap()
+    };
+
+    // Anonymous: refused, for files, on-demand conversions and the share page.
+    for path in [
+        format!("/m/{open}/full.mp4"),
+        format!("/m/{open}/full.gif"),
+        format!("/g/{open}"),
+        format!("/g/{open}.mp4"),
+    ] {
+        assert_eq!(h.send(get(path.clone(), None)).await.status(), StatusCode::UNAUTHORIZED, "{path}");
+    }
+
+    // A read key works and gets a private cache header.
+    let resp = h
+        .send(get(format!("/m/{open}/full.mp4"), Some(("authorization", format!("Bearer {}", h.token)))))
+        .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.headers()["cache-control"], "private, max-age=31536000, immutable");
+    let resp =
+        h.send(get(format!("/g/{open}"), Some(("authorization", format!("Bearer {}", h.token))))).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(resp.headers()["cache-control"].to_str().unwrap().starts_with("private"));
+
+    // So does the owner's session cookie (what the web UI's <video> sends).
+    let cookie = h.login().await;
+    let resp = h.send(get(format!("/m/{open}/poster.webp"), Some(("cookie", cookie.clone())))).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // An upload-only key may not look.
+    let uploader = h.mint(unigif::auth::Scopes::preset("uploader").unwrap(), &[]).await;
+    let resp = h
+        .send(get(format!("/m/{open}/full.mp4"), Some(("authorization", format!("Bearer {uploader}")))))
+        .await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // A key with #secret hidden cannot fetch that GIF's media.
+    let limited = h.mint(unigif::auth::Scopes::preset("read_only").unwrap(), &["secret"]).await;
+    let auth = || Some(("authorization", format!("Bearer {limited}")));
+    assert_eq!(h.send(get(format!("/m/{open}/full.mp4"), auth())).await.status(), StatusCode::OK);
+    assert_eq!(h.send(get(format!("/m/{secret}/full.mp4"), auth())).await.status(), StatusCode::NOT_FOUND);
+    assert_eq!(h.send(get(format!("/g/{secret}"), auth())).await.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn public_media_is_the_default() {
+    let h = Harness::new().await;
+    let id = h.add_gif(1, "").await["id"].as_str().unwrap().to_string();
+    let resp = h.send(Request::get(format!("/m/{id}/full.mp4")).body(Body::empty()).unwrap()).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.headers()["cache-control"], "public, max-age=31536000, immutable");
+}

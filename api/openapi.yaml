@@ -363,6 +363,32 @@ paths:
         "401": {$ref: '#/components/responses/Problem'}
         "403": {$ref: '#/components/responses/Problem'}
         "404": {$ref: '#/components/responses/Problem'}
+  /gifs/{id}/convert:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string}}
+    post:
+      tags: [gifs]
+      summary: Start the on-demand conversions now ("convert now")
+      description: |
+        Returns at once. The named formats are converted in the background, so the first request for them is
+        served from the cache. Formats already cached or being converted are not repeated. `{}` starts all four.
+      x-scope: read
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ConvertRequest'}
+      responses:
+        "202":
+          description: Started
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ConvertStarted'}
+        "400": {$ref: '#/components/responses/Problem'}
+        "401": {$ref: '#/components/responses/Problem'}
+        "403": {$ref: '#/components/responses/Problem'}
+        "404": {$ref: '#/components/responses/Problem'}
+        "409": {$ref: '#/components/responses/Problem'}
   /tags:
     get:
       tags: [tags]
@@ -884,6 +910,21 @@ components:
         add: {type: array, items: {type: string}}
         remove: {type: array, items: {type: string}}
         trash: {type: boolean}
+    ConvertRequest:
+      type: object
+      properties:
+        variants:
+          type: array
+          items: {type: string, enum: [gif, preview_gif, webm, webp]}
+          description: Names as in the GIF's `media` object. Empty or missing means all four.
+    ConvertStarted:
+      type: object
+      required: [started]
+      properties:
+        started:
+          type: array
+          items: {type: string}
+          description: File names of the conversions started (or already cached)
     TrashEmptied:
       type: object
       required: [purged]

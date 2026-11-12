@@ -77,6 +77,7 @@ pub fn router(app: App) -> Router {
         .route("/gifs/{id}/tags", post(gifs::edit_tags))
         .route("/gifs/{id}/restore", post(gifs::restore))
         .route("/gifs/{id}/use", post(gifs::use_gif))
+        .route("/gifs/{id}/convert", post(gifs::convert))
         .route("/tags", get(tags::list))
         .route("/tags/suggest", get(tags::suggest))
         .route("/tags/{name}", patch(tags::rename).delete(tags::delete))

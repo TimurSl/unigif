@@ -343,3 +343,74 @@ test('settings: clear cache, list and revoke sessions, change the password', asy
   expect(back.status()).toBe(200);
   await other.close();
 });
+
+test('library order: Oldest, and Most used follows copies; copying a GIF link starts its conversion', async ({ page }) => {
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await login(page);
+  const gifs = await allGifs(page); // oldest first
+  await page.goto('/');
+  const tiles = page.getByRole('button', { name: /tagged|without hashtags/ });
+
+  await page.getByTestId('library-sort').getByRole('button', { name: 'Oldest' }).click();
+  await expect(page.getByTestId('library-sort').getByRole('button', { name: 'Oldest' })).toHaveAttribute('aria-pressed', 'true');
+  const oldest = (await (await page.request.get(`/api/v1/gifs/${gifs[0].id}`)).json()) as { description: string | null; tags: string[] };
+  await expect(tiles.first()).toHaveAccessibleName(new RegExp(oldest.tags.map((t) => `#${t}`).join(' ') || 'without hashtags'));
+
+  // Copy the newest GIF's GIF link twice from the detail view.
+  const target = gifs[gifs.length - 1];
+  const before = (await (await page.request.get('/api/v1/stats')).json()).cache_files as number;
+  await page.goto(`/?gif=${target.id}`);
+  const detail = page.getByRole('dialog', { name: 'GIF details' });
+  for (let i = 0; i < 2; i++) {
+    await detail.getByRole('button', { name: 'GIF', exact: true }).click();
+    await expect(page.getByRole('status').filter({ hasText: 'GIF link copied' }).first()).toBeVisible();
+  }
+  // The conversion was started by the copy, before anyone opened the link.
+  await expect.poll(async () => (await (await page.request.get('/api/v1/stats')).json()).cache_files).toBeGreaterThan(before);
+  await page.keyboard.press('Escape');
+
+  // Most used puts it first; the choice is remembered.
+  await page.getByTestId('library-sort').getByRole('button', { name: 'Most used' }).click();
+  await expect.poll(async () => (await (await page.request.get('/api/v1/gifs?sort=used&limit=1')).json()).items[0].id).toBe(target.id);
+  const top = (await (await page.request.get(`/api/v1/gifs/${target.id}`)).json()) as { tags: string[]; description: string | null };
+  await expect(tiles.first()).toHaveAccessibleName(new RegExp(top.description ?? (top.tags.map((t) => `#${t}`).join(' ') || 'without hashtags')));
+  await page.reload();
+  await expect(page.getByTestId('library-sort').getByRole('button', { name: 'Most used' })).toHaveAttribute('aria-pressed', 'true');
+  await page.getByTestId('library-sort').getByRole('button', { name: 'Newest' }).click();
+});
+
+test('an open search picks up a GIF that newly matches it, without a reload', async ({ page }) => {
+  await login(page);
+  await page.goto('/?q=fresh');
+  await expect(page.getByText('No GIFs match.')).toBeVisible();
+  const g = (await allGifs(page))[0];
+  expect((await page.request.post(`/api/v1/gifs/${g.id}/tags`, { data: { add: ['fresh'] } })).ok()).toBeTruthy();
+  await expect(page.getByRole('button', { name: /#fresh/ })).toHaveCount(1);
+  // And leaves it again when the hashtag goes.
+  expect((await page.request.post(`/api/v1/gifs/${g.id}/tags`, { data: { remove: ['fresh'] } })).ok()).toBeTruthy();
+  await expect(page.getByRole('button', { name: /#fresh/ })).toHaveCount(0);
+});
+
+test('drag a rubber band over tiles to select them', async ({ page }) => {
+  await login(page);
+  await page.goto('/');
+  const tiles = page.getByRole('button', { name: /tagged|without hashtags/ });
+  await expect(tiles.nth(1)).toBeVisible();
+  await page.getByRole('button', { name: 'Select', exact: true }).click();
+  const a = (await tiles.nth(0).boundingBox())!;
+  const b = (await tiles.nth(1).boundingBox())!;
+  await page.mouse.move(a.x + 4, a.y + 4);
+  await page.mouse.down();
+  await page.mouse.move((a.x + b.x) / 2 + 20, (a.y + b.y) / 2 + 20, { steps: 4 });
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 4 });
+  await expect(page.getByTestId('rubber-band')).toBeVisible();
+  await page.mouse.up();
+  await expect(page.getByTestId('rubber-band')).toHaveCount(0);
+  const count = Number((await page.getByTestId('selected-count').textContent())!.split(' ')[0]);
+  expect(count).toBeGreaterThanOrEqual(2);
+  // The click at the end of the drag did not untick the tile under the pointer.
+  await expect(tiles.nth(1)).toHaveAttribute('aria-pressed', 'true');
+  await expect(tiles.nth(0)).toHaveAttribute('aria-pressed', 'true');
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('selected-count')).toHaveCount(0);
+});

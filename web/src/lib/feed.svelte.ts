@@ -45,6 +45,7 @@ export class Feed {
     }
   }
 
+  /** Swap in a newer copy of a GIF that is already listed. */
   replace(gif: Gif) {
     const i = this.items.findIndex((g) => g.id === gif.id);
     if (i >= 0) this.items[i] = gif;
@@ -59,10 +60,28 @@ export class Feed {
     return this.items.some((g) => g.id === id);
   }
 
-  prepend(gif: Gif) {
-    if (this.has(gif.id)) return this.replace(gif);
-    this.items.unshift(gif);
+  /**
+   * Put a GIF that newly belongs in this list at its place in the order. Returns false when that place
+   * is not among the loaded items (further down than has been fetched), or the order cannot be worked
+   * out from the GIF object (`used`): the caller then offers a reload.
+   */
+  insertSorted(gif: Gif, sort: 'new' | 'old' | 'used'): boolean {
+    if (this.has(gif.id)) {
+      this.replace(gif);
+      return true;
+    }
+    if (sort === 'used') return false;
+    // The server orders by (created_at, id); timestamps are compared as numbers since only some carry
+    // fractional seconds.
+    const t = Date.parse(gif.created_at);
+    const cmp = (g: Gif) => Date.parse(g.created_at) - t || (g.id < gif.id ? -1 : g.id > gif.id ? 1 : 0);
+    // Newest first: before the first item that is older; oldest first: before the first that is newer.
+    const i = this.items.findIndex((g) => (sort === 'new' ? cmp(g) < 0 : cmp(g) > 0));
+    if (i >= 0) this.items.splice(i, 0, gif);
+    else if (this.done) this.items.push(gif);
+    else return false;
     this.schedulePoll();
+    return true;
   }
 
   /** Items still being transcoded are re-fetched until they are ready. */

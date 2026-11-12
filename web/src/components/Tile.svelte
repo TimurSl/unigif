@@ -1,6 +1,6 @@
 <script lang="ts">
   import { thumbHashToDataURL } from 'thumbhash';
-  import { copyText, gifUrl } from '../lib/actions';
+  import { copyGif, gifUrl } from '../lib/actions';
   import { mediaPath, type Gif } from '../lib/api';
 
   let {
@@ -42,7 +42,12 @@
 
   const preview = $derived(gif.media?.preview_mp4 ? mediaPath(gif.media.preview_mp4.url) : null);
   const poster = $derived(gif.media?.poster ? mediaPath(gif.media.poster.url) : null);
-  const play = $derived(visible && animate && preview !== null && (!reduceMotion || hovering));
+  // Reduced motion on a touch screen has no hover to preview with: the first tap plays, the second opens.
+  let tapped = $state(false);
+  const play = $derived(visible && preview !== null && (tapped || (animate && (!reduceMotion || hovering))));
+  $effect(() => {
+    if (!visible) tapped = false;
+  });
 
   $effect(() => {
     if (!el) return;
@@ -63,7 +68,7 @@
 
   function copyLink(e: MouseEvent | KeyboardEvent) {
     e.stopPropagation();
-    void copyText('Link', gifUrl(gif) ?? location.href);
+    void copyGif(gif, 'Link', gifUrl(gif) ?? location.href);
   }
 
   // Long-press (touch and pen only; a mouse has hover and right-click) opens the tile menu. A scroll or
@@ -99,6 +104,10 @@
       pressedLong = false;
       return;
     }
+    if (reduceMotion && touching && !selecting && preview && !tapped) {
+      tapped = true;
+      return;
+    }
     onopen(gif, e);
   }
 
@@ -111,7 +120,7 @@
   });
 </script>
 
-<div class="tile" class:selected role="presentation" onmouseenter={() => (hovering = true)} onmouseleave={() => (hovering = false)}>
+<div class="tile" class:selected role="presentation" onmouseenter={() => (hovering = !touching)} onmouseleave={() => (hovering = false)}>
   <button
     bind:this={el}
     class="open"

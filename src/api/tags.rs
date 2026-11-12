@@ -48,12 +48,23 @@ async fn query_tags(
     limit: i64,
     offset: i64,
 ) -> Result<Vec<TagRow>, sqlx::Error> {
-    let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new(
-        "SELECT t.name AS name, COUNT(*) AS gif_count, t.last_used_at AS last_used_at
-         FROM tags t JOIN gif_tags gt ON gt.tag_id = t.id JOIN gifs g ON g.id = gt.gif_id
-         WHERE g.deleted_at IS NULL",
-    );
-    vis.push_clause(&mut qb, "g");
+    // The maintained `tags.gif_count` counts GIFs outside the trash. With
+    // hidden hashtags, what the caller cannot see is subtracted; counting
+    // through gif_tags instead would cost a pass over the whole library.
+    let mut qb: QueryBuilder<Sqlite> = if vis.is_all() {
+        QueryBuilder::new(
+            "SELECT t.name AS name, t.gif_count AS gif_count, t.last_used_at AS last_used_at
+             FROM tags t WHERE t.gif_count > 0",
+        )
+    } else {
+        let mut qb = QueryBuilder::new(
+            "SELECT t.name AS name, t.gif_count - COALESCE(h.n, 0) AS gif_count, t.last_used_at AS last_used_at
+             FROM tags t LEFT JOIN ",
+        );
+        vis.push_hidden_tag_counts(&mut qb);
+        qb.push(" h ON h.tag_id = t.id WHERE t.gif_count - COALESCE(h.n, 0) > 0");
+        qb
+    };
     if let Some(p) = prefix {
         qb.push(" AND t.name >= ").push_bind(p.to_string());
         qb.push(" AND t.name <= ").push_bind(format!("{p}\u{10FFFF}"));
@@ -66,7 +77,6 @@ async fn query_tags(
         }
         qb.push(")");
     }
-    qb.push(" GROUP BY t.id");
     qb.push(match order {
         Order::Recent => " ORDER BY t.last_used_at DESC, t.name",
         Order::Popular => " ORDER BY gif_count DESC, t.name",
@@ -278,9 +288,11 @@ pub async fn delete(
 
 /// Number of hashtags with at least one visible live GIF.
 pub async fn count_visible(db: &Db, vis: &Visibility) -> Result<i64, sqlx::Error> {
-    let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new(
-        "SELECT COUNT(DISTINCT gt.tag_id) FROM gif_tags gt JOIN gifs g ON g.id = gt.gif_id WHERE g.deleted_at IS NULL",
-    );
-    vis.push_clause(&mut qb, "g");
+    if vis.is_all() {
+        return sqlx::query_scalar("SELECT COUNT(*) FROM tags WHERE gif_count > 0").fetch_one(db).await;
+    }
+    let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new("SELECT COUNT(*) FROM tags t LEFT JOIN ");
+    vis.push_hidden_tag_counts(&mut qb);
+    qb.push(" h ON h.tag_id = t.id WHERE t.gif_count - COALESCE(h.n, 0) > 0");
     qb.build_query_scalar().fetch_one(db).await
 }

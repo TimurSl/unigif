@@ -30,6 +30,21 @@ export async function copyText(label: string, text: string) {
   }
 }
 
+/** Count a use (copy or share), for the "Most used" order. Failures do not matter. */
+export function pingUse(g: Gif) {
+  api.useGif(g.id).catch(() => {});
+}
+
+/**
+ * Copy a link to a GIF and count it as a use. For a converted format, start the conversion now so the
+ * link already works when someone opens it.
+ */
+export async function copyGif(g: Gif, label: string, text: string, format?: Format) {
+  if (format && format !== 'mp4') api.convert(g.id, [format]).catch(() => {});
+  await copyText(label, text);
+  pingUse(g);
+}
+
 export const canShare = typeof navigator.share === 'function';
 
 export async function shareGif(g: Gif) {
@@ -37,6 +52,7 @@ export async function shareGif(g: Gif) {
   if (!url || !canShare) return;
   try {
     await navigator.share({ url });
+    pingUse(g);
   } catch (e) {
     // Closing the share sheet is not an error.
     if (!(e instanceof DOMException && e.name === 'AbortError')) toast('Could not share', { kind: 'error' });

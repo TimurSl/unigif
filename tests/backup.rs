@@ -81,7 +81,10 @@ async fn pending_migration_snapshots_the_existing_database_first() {
     let latest: i64 =
         sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations").fetch_one(&pool).await.unwrap();
     sqlx::query("DELETE FROM _sqlx_migrations WHERE version = ?").bind(latest).execute(&pool).await.unwrap();
-    sqlx::query("DROP TABLE settings").execute(&pool).await.unwrap(); // what 0002 created
+    // Undo what the latest migration (0003_indexes) created.
+    for index in ["gifs_trash", "gifs_used", "variants_cache"] {
+        sqlx::query(&format!("DROP INDEX {index}")).execute(&pool).await.unwrap();
+    }
     drop(pool);
 
     let pool = db::open(&db_path).await.unwrap();
@@ -94,10 +97,10 @@ async fn pending_migration_snapshots_the_existing_database_first() {
         snaps[0].starts_with(&format!("pre-migration-v{}-", latest - 1))
             || snaps[0].starts_with("pre-migration-v")
     );
-    // The copy is the state before migrating: no settings table; the live DB has it again.
+    // The copy is the state before migrating: no new index; the live DB has it again.
     let snap = data.join("backups").join(&snaps[0]);
-    assert_eq!(scalar(&snap, "SELECT count(*) FROM sqlite_master WHERE name = 'settings'").await, 0);
-    let live: i64 = sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE name = 'settings'")
+    assert_eq!(scalar(&snap, "SELECT count(*) FROM sqlite_master WHERE name = 'gifs_used'").await, 0);
+    let live: i64 = sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE name = 'gifs_used'")
         .fetch_one(&pool)
         .await
         .unwrap();

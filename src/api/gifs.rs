@@ -467,6 +467,64 @@ pub async fn restore(
     Ok(Json(object(&app, row).await?))
 }
 
+#[derive(Deserialize)]
+pub struct ConvertBody {
+    /// Names as in the GIF object's `media`: `gif`, `preview_gif`, `webm`, `webp`.
+    /// Empty or missing (send `{}`): all four.
+    #[serde(default)]
+    variants: Vec<String>,
+}
+
+fn on_demand_variant(name: &str) -> Option<media::Variant> {
+    use media::Variant::*;
+    match name {
+        "gif" => Some(FullGif),
+        "preview_gif" => Some(PreviewGif),
+        "webm" => Some(FullWebm),
+        "webp" => Some(FullWebp),
+        _ => None,
+    }
+}
+
+/// `POST /gifs/{id}/convert`: start the on-demand conversions now, so the first
+/// request for them is a cache hit. Returns at once; conversions already cached
+/// or in progress are not repeated.
+pub async fn convert(
+    State(app): State<App>,
+    Auth(p): Auth,
+    Path(id): Path<String>,
+    ApiJson(body): ApiJson<ConvertBody>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    p.require(Scope::Read)?;
+    let row = visible(&app, &p, &id, Trash::Without).await?;
+    if row.status != "ready" {
+        return Err(ApiError::Conflict("the GIF is not ready yet".into()));
+    }
+    let names = body.variants;
+    let mut variants = Vec::new();
+    if names.is_empty() {
+        variants.extend(media::Variant::ON_DEMAND);
+    }
+    for n in &names {
+        let v = on_demand_variant(n).ok_or_else(|| {
+            ApiError::BadRequest(format!("unknown variant {n:?}; use gif, preview_gif, webm or webp"))
+        })?;
+        if !variants.contains(&v) {
+            variants.push(v);
+        }
+    }
+    for v in &variants {
+        let (app, row, v) = (app.clone(), row.clone(), *v);
+        tokio::spawn(async move {
+            if let Err(e) = crate::cache::ensure(&app, &row, v).await {
+                tracing::warn!(gif_id = row.id, variant = v.file_name(), error = ?e, "warm-up conversion failed");
+            }
+        });
+    }
+    let started: Vec<&str> = variants.iter().map(|v| v.file_name()).collect();
+    Ok((StatusCode::ACCEPTED, Json(json!({ "started": started }))))
+}
+
 /// `POST /gifs/trash/empty`: purge everything in the trash the caller can
 /// see, files and cached conversions included.
 pub async fn empty_trash(State(app): State<App>, Auth(p): Auth) -> Result<Json<serde_json::Value>, ApiError> {

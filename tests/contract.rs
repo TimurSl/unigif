@@ -141,6 +141,10 @@ async fn responses_match_their_schemas() {
     h.call("DELETE", &format!("/api/v1/gifs/{id}"), None).await;
     let (_, restored) = h.call("POST", &format!("/api/v1/gifs/{id}/restore"), None).await;
     validate("Gif", &restored);
+    let (s, started) =
+        h.call("POST", &format!("/api/v1/gifs/{id}/convert"), Some(json!({"variants": ["gif"]}))).await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    validate("ConvertStarted", &started);
     let (s, emptied) = h.call("POST", "/api/v1/gifs/trash/empty", None).await;
     assert_eq!(s, StatusCode::OK);
     validate("TrashEmptied", &emptied);

@@ -109,6 +109,8 @@
     onend={() => void feed.more()}
     selecting
     selected={(id) => selection.has(id)}
+    onband={(ids) => selection.band(ids)}
+    onbandend={() => selection.endBand()}
   >
     {#snippet empty()}
       <p><strong>The trash is empty.</strong></p>

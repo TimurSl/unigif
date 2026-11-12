@@ -12,12 +12,13 @@ export interface Toast {
 export interface Prefs {
   proceed_to_next: boolean;
   unsorted_sort: 'new' | 'old';
+  library_sort: 'new' | 'used' | 'old';
 }
 
 const PREF_KEY = 'unigif.prefs';
 
 function loadLocalPrefs(): Prefs {
-  const base: Prefs = { proceed_to_next: true, unsorted_sort: 'new' };
+  const base: Prefs = { proceed_to_next: true, unsorted_sort: 'new', library_sort: 'new' };
   try {
     return { ...base, ...JSON.parse(localStorage.getItem(PREF_KEY) ?? '{}') };
   } catch {
@@ -74,6 +75,7 @@ export async function boot() {
     if (server) {
       if (typeof server.proceed_to_next === 'boolean') app.prefs.proceed_to_next = server.proceed_to_next;
       if (server.unsorted_sort === 'new' || server.unsorted_sort === 'old') app.prefs.unsorted_sort = server.unsorted_sort;
+      if (server.library_sort === 'new' || server.library_sort === 'used' || server.library_sort === 'old') app.prefs.library_sort = server.library_sort;
     }
     if (route.view === 'login') navigate('/', { replace: true });
     void refreshStats();

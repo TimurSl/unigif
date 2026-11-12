@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { canShare, copyText, gifUrl, shareGif, trashGif } from '../lib/actions';
+  import { canShare, copyGif, gifUrl, shareGif, trashGif } from '../lib/actions';
   import type { Gif } from '../lib/api';
   import Sheet from './Sheet.svelte';
 
@@ -19,7 +19,7 @@
       class="btn row"
       type="button"
       onclick={() => {
-        void copyText('Link', url);
+        void copyGif(target, 'Link', url);
         onclose();
       }}>Copy link</button
     >

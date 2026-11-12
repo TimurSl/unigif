@@ -13,6 +13,8 @@ use crate::error::ApiError;
 use crate::media::{self, Variant};
 
 const CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
+/// Private media mode: browsers may keep the file, shared caches may not.
+const CACHE_CONTROL_PRIVATE: &str = "private, max-age=31536000, immutable";
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum RangeSpec {
@@ -95,6 +97,7 @@ pub async fn serve(
     if row.status != "ready" || row.deleted_at.is_some() {
         return Err(ApiError::NotFound("no such media"));
     }
+    crate::auth::check_media_access(&app, &headers, &row.id).await?;
 
     let mut file = open_variant(&app, &row, variant).await?;
     let len = file.metadata().await.map_err(anyhow::Error::from)?.len();
@@ -104,7 +107,8 @@ pub async fn serve(
     let etag = format!("\"{id}-{}-{len}\"", variant.file_name());
     let mut resp_headers = HeaderMap::new();
     resp_headers.insert(header::ETAG, HeaderValue::from_str(&etag).map_err(anyhow::Error::from)?);
-    resp_headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(CACHE_CONTROL));
+    let cache_control = if app.cfg.media.public { CACHE_CONTROL } else { CACHE_CONTROL_PRIVATE };
+    resp_headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache_control));
     resp_headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
     resp_headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(variant.content_type()));
 

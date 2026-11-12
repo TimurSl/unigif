@@ -39,6 +39,21 @@ export class Selection {
     this.anchor = id;
   }
 
+  /** What was ticked when a rubber-band drag began; the band adds to it. */
+  private bandBase: Set<string> | null = null;
+
+  /** Rubber band (desktop): tick what the band covers, on top of what was ticked before the drag. */
+  band(ids: string[]) {
+    this.active = true;
+    this.bandBase ??= new Set(this.ids);
+    this.ids = new Set([...this.bandBase, ...ids]);
+    if (ids.length) this.anchor = ids[ids.length - 1];
+  }
+
+  endBand() {
+    this.bandBase = null;
+  }
+
   all(items: Gif[]) {
     this.ids = new Set(items.map((g) => g.id));
   }

@@ -213,6 +213,11 @@ export const api = {
     request<Gif>('PATCH', `/gifs/${id}`, { body: { description: description || null } }),
   trash: (id: string) => request<void>('DELETE', `/gifs/${id}`),
   restore: (id: string) => request<Gif>('POST', `/gifs/${id}/restore`),
+  /** A GIF was sent somewhere: feeds the "Most used" order. */
+  useGif: (id: string) => request<void>('POST', `/gifs/${id}/use`),
+  /** Start converting these formats now, so the link works at once for whoever opens it. */
+  convert: (id: string, variants: ('gif' | 'preview_gif' | 'webm' | 'webp')[]) =>
+    request<{ started: string[] }>('POST', `/gifs/${id}/convert`, { body: { variants } }),
   /** Purge everything in the trash now. Cannot be undone. */
   emptyTrash: () => request<{ purged: number }>('POST', '/gifs/trash/empty'),
   /** Drop every cached GIF/WebM/WebP conversion (admin). */

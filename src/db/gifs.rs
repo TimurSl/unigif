@@ -99,20 +99,40 @@ impl Visibility {
         self.deny.is_empty()
     }
 
-    /// Append ` AND NOT EXISTS (…)` for the GIF aliased `alias`.
+    /// Append ` AND {alias}.id NOT IN (…)` for the GIF aliased `alias`. The
+    /// subquery is not correlated, so SQLite builds the set of hidden GIFs once
+    /// per statement instead of probing per row (a correlated `NOT EXISTS`
+    /// made full scans such as `/stats` take most of a second at 50 000 GIFs).
     pub fn push_clause(&self, qb: &mut QueryBuilder<'_, Sqlite>, alias: &str) {
         if self.deny.is_empty() {
             return;
         }
         qb.push(format!(
-            " AND NOT EXISTS (SELECT 1 FROM gif_tags dgt JOIN tags dt ON dt.id = dgt.tag_id
-               WHERE dgt.gif_id = {alias}.id AND dt.name IN ("
+            " AND {alias}.id NOT IN (SELECT dgt.gif_id FROM gif_tags dgt
+               WHERE dgt.tag_id IN (SELECT dt.id FROM tags dt WHERE dt.name IN ("
         ));
         let mut sep = qb.separated(", ");
         for d in &self.deny {
             sep.push_bind(d.clone());
         }
-        qb.push("))");
+        qb.push(")))");
+    }
+
+    /// Push a subquery `(tag_id, n)`: for each hashtag, how many GIFs outside
+    /// the trash carry it and are hidden from the credential. Subtracted from
+    /// the maintained `tags.gif_count`, this gives visible counts at a cost
+    /// that grows with the hidden GIFs rather than with the library.
+    pub fn push_hidden_tag_counts(&self, qb: &mut QueryBuilder<'_, Sqlite>) {
+        qb.push(
+            "(SELECT hgt.tag_id AS tag_id, COUNT(*) AS n FROM gif_tags hgt JOIN gifs hg ON hg.id = hgt.gif_id
+              WHERE hg.deleted_at IS NULL AND hgt.gif_id IN (SELECT dgt.gif_id FROM gif_tags dgt
+                WHERE dgt.tag_id IN (SELECT dt.id FROM tags dt WHERE dt.name IN (",
+        );
+        let mut sep = qb.separated(", ");
+        for d in &self.deny {
+            sep.push_bind(d.clone());
+        }
+        qb.push("))) GROUP BY hgt.tag_id)");
     }
 
     /// Is this GIF hidden from the credential (ignoring trash)?
@@ -217,6 +237,9 @@ pub struct ListParams {
     pub tags: Vec<String>,
     /// A GIF must carry a hashtag starting with this.
     pub prefix: Option<String>,
+    /// Set by [`list`]: the prefix covers many GIFs, so walking the library
+    /// in order and stopping at `limit` beats collecting every match first.
+    pub prefix_broad: bool,
     /// Hashtags a GIF must not carry.
     pub exclude: Vec<String>,
     pub unsorted: bool,
@@ -252,7 +275,11 @@ fn push_filters(qb: &mut QueryBuilder<'_, Sqlite>, p: &ListParams, vis: &Visibil
     }
     if let Some(prefix) = &p.prefix {
         // A range scan on the unique index on tags.name; no LIKE escaping needed.
-        qb.push(" AND g.id IN (SELECT gt.gif_id FROM gif_tags gt JOIN tags t ON t.id = gt.tag_id WHERE t.name >= ");
+        if p.prefix_broad {
+            qb.push(" AND EXISTS (SELECT 1 FROM gif_tags gt JOIN tags t ON t.id = gt.tag_id WHERE gt.gif_id = g.id AND t.name >= ");
+        } else {
+            qb.push(" AND g.id IN (SELECT gt.gif_id FROM gif_tags gt JOIN tags t ON t.id = gt.tag_id WHERE t.name >= ");
+        }
         qb.push_bind(prefix.clone());
         qb.push(" AND t.name <= ");
         qb.push_bind(format!("{prefix}\u{10FFFF}"));
@@ -283,12 +310,34 @@ fn push_cursor(qb: &mut QueryBuilder<'_, Sqlite>, p: &ListParams, c: &Cursor) {
     }
 }
 
+/// Above this many tagged GIFs a prefix counts as broad (see `prefix_broad`).
+/// Measured at 50 000 GIFs: collecting the matches costs about one row each,
+/// walking the library costs about `limit × library / matches`.
+const BROAD_PREFIX: i64 = 1000;
+
+/// How many GIFs carry a hashtag starting with `prefix`, from the maintained
+/// counts (an upper bound: a GIF with two matching hashtags counts twice).
+async fn prefix_coverage(db: &Db, prefix: &str) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar("SELECT COALESCE(SUM(gif_count), 0) FROM tags WHERE name >= ? AND name <= ?")
+        .bind(prefix)
+        .bind(format!("{prefix}\u{10FFFF}"))
+        .fetch_one(db)
+        .await
+}
+
 /// A page of GIFs and the cursor for the next one.
 pub async fn list(
     db: &Db,
     p: &ListParams,
     vis: &Visibility,
 ) -> Result<(Vec<GifRow>, Option<String>), sqlx::Error> {
+    let mut broad = None;
+    if let Some(prefix) = &p.prefix {
+        if !p.trash && prefix_coverage(db, prefix).await? > BROAD_PREFIX {
+            broad = Some(ListParams { prefix_broad: true, ..p.clone() });
+        }
+    }
+    let p = broad.as_ref().unwrap_or(p);
     let mut qb = QueryBuilder::new("SELECT g.* FROM gifs g");
     push_filters(&mut qb, p, vis);
     if let Some(c) = &p.cursor {

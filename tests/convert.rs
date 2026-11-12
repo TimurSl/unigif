@@ -579,3 +579,51 @@ async fn the_gif_object_reports_the_original_size() {
     let (_, v) = h.add("?wait=60", std::fs::read(&path).unwrap()).await;
     assert_eq!(v["original_kept"], true, "a transparent GIF is");
 }
+
+#[tokio::test]
+async fn convert_now_warms_the_cache_without_waiting() {
+    let h = Harness::new().await;
+    let id = wide(&h, 1).await["id"].as_str().unwrap().to_string();
+    let (s, v) = h
+        .call(
+            "POST",
+            &format!("/api/v1/gifs/{id}/convert"),
+            Some(serde_json::json!({"variants": ["gif", "webp"]})),
+        )
+        .await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{v}");
+    assert_eq!(v["started"], serde_json::json!(["full.gif", "full.webp"]));
+    // The conversions finish in the background.
+    for _ in 0..300 {
+        if cache_file(&h, &id, "full.gif").exists() && cache_file(&h, &id, "full.webp").exists() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(cache_file(&h, &id, "full.gif").exists());
+    assert!(cache_file(&h, &id, "full.webp").exists());
+    assert!(!cache_file(&h, &id, "full.webm").exists(), "only what was asked for");
+
+    // `{}` means all four; bad names and unknown GIFs are refused.
+    let (s, v) = h.call("POST", &format!("/api/v1/gifs/{id}/convert"), Some(serde_json::json!({}))).await;
+    assert_eq!((s, v["started"].as_array().unwrap().len()), (StatusCode::ACCEPTED, 4));
+    let (s, _) = h
+        .call("POST", &format!("/api/v1/gifs/{id}/convert"), Some(serde_json::json!({"variants": ["mp4"]})))
+        .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    let (s, _) = h.call("POST", "/api/v1/gifs/AAAAAAAAAAAA/convert", Some(serde_json::json!({}))).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    // A key that cannot see the GIF cannot warm it either.
+    let (_, _) =
+        h.call("PATCH", &format!("/api/v1/gifs/{id}"), Some(serde_json::json!({"tags": ["secret"]}))).await;
+    let limited = h.mint(unigif::auth::Scopes::preset("read_only").unwrap(), &["secret"]).await;
+    let resp = h
+        .send(h.req(
+            "POST",
+            &format!("/api/v1/gifs/{id}/convert"),
+            Some(&limited),
+            Some(serde_json::json!({})),
+        ))
+        .await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}

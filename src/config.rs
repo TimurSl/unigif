@@ -115,6 +115,11 @@ pub struct UploadConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct MediaConfig {
+    /// `true` (default): `/m/*` and `/g/*` are open to anyone who has the
+    /// (unguessable) link, so links paste and embed anywhere. `false`: they
+    /// need a session or a `read` key, hidden hashtags apply, and responses
+    /// are `Cache-Control: private`. Embeds and link unfurls then stop working.
+    pub public: bool,
     pub keep_originals: KeepOriginals,
     /// Colour transparent pixels are composited onto, `RRGGBB`.
     pub matte: String,
@@ -305,6 +310,7 @@ impl Default for UploadConfig {
 impl Default for MediaConfig {
     fn default() -> Self {
         Self {
+            public: true,
             keep_originals: KeepOriginals::Alpha,
             matte: "000000".into(),
             crf: 23,
