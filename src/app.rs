@@ -2,9 +2,10 @@
 
 use std::sync::Arc;
 
-use tokio::sync::{broadcast, Notify};
+use tokio::sync::{broadcast, Mutex, Notify};
 
 use crate::auth::ratelimit::{LoginThrottle, RateLimiter};
+use crate::cache::InFlight;
 use crate::config::Config;
 use crate::db::Db;
 use crate::media::ffmpeg::Ffmpeg;
@@ -26,6 +27,10 @@ pub struct AppState {
     pub events: broadcast::Sender<Event>,
     pub limiter: RateLimiter,
     pub login_throttle: LoginThrottle,
+    /// On-demand conversions in progress (see `cache`).
+    pub inflight: InFlight,
+    /// Held while the cache is being trimmed.
+    pub evicting: Mutex<()>,
 }
 
 pub type App = Arc<AppState>;
@@ -42,6 +47,8 @@ impl AppState {
             events,
             limiter: RateLimiter::default(),
             login_throttle: LoginThrottle::default(),
+            inflight: InFlight::default(),
+            evicting: Mutex::new(()),
         })
     }
 

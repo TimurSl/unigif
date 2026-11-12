@@ -9,6 +9,11 @@ export interface MediaFile {
   bytes: number;
 }
 
+export interface OnDemandFile {
+  url: string;
+  on_demand: true;
+}
+
 export interface Gif {
   id: string;
   status: 'processing' | 'ready' | 'failed';
@@ -22,7 +27,18 @@ export interface Gif {
   source: { type: string; id: string | null };
   created_at: string;
   sorted_at: string | null;
-  media: { mp4: MediaFile | null; preview_mp4: MediaFile | null; poster: MediaFile | null } | null;
+  /** Public share page (OpenGraph tags, so a pasted link unfurls). */
+  page_url: string;
+  media: {
+    mp4: MediaFile | null;
+    preview_mp4: MediaFile | null;
+    poster: MediaFile | null;
+    // Converted the first time the URL is fetched.
+    gif: OnDemandFile;
+    preview_gif: OnDemandFile;
+    webm: OnDemandFile;
+    webp: OnDemandFile;
+  } | null;
   duplicate?: boolean;
 }
 
@@ -48,6 +64,9 @@ export interface Stats {
   bytes_stored: number;
   bytes_original: number;
   bytes_saved: number;
+  cache_files: number;
+  cache_bytes: number;
+  cache_limit: number;
 }
 
 export interface Page<T> {

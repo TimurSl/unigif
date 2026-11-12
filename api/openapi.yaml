@@ -649,10 +649,21 @@ components:
         width: {type: [integer, "null"]}
         height: {type: [integer, "null"]}
         bytes: {type: integer}
+    OnDemandFile:
+      type: object
+      required: [url, on_demand]
+      description: A format converted the first time its URL is fetched, then served from a bounded cache
+      properties:
+        url: {type: string}
+        on_demand: {type: boolean, const: true}
     Media:
       type: object
-      required: [mp4, preview_mp4, poster]
+      required: [mp4, preview_mp4, poster, gif, preview_gif, webm, webp]
       properties:
+        gif: {$ref: '#/components/schemas/OnDemandFile'}
+        preview_gif: {$ref: '#/components/schemas/OnDemandFile'}
+        webm: {$ref: '#/components/schemas/OnDemandFile'}
+        webp: {$ref: '#/components/schemas/OnDemandFile'}
         mp4:
           oneOf: [{$ref: '#/components/schemas/MediaFile'}, {type: "null"}]
         preview_mp4:
@@ -661,9 +672,10 @@ components:
           oneOf: [{$ref: '#/components/schemas/MediaFile'}, {type: "null"}]
     Gif:
       type: object
-      required: [id, status, tags, description, width, height, duration_ms, has_alpha, thumbhash, source, created_at, sorted_at, media]
+      required: [id, status, tags, description, width, height, duration_ms, has_alpha, thumbhash, source, created_at, sorted_at, page_url, media]
       properties:
         id: {type: string, minLength: 12, maxLength: 12}
+        page_url: {type: string, description: 'Public share page with OpenGraph tags. /g/{id}.mp4, .gif, .webm and .webp redirect to the file'}
         status: {type: string, enum: [processing, ready, failed]}
         tags:
           type: array
@@ -813,7 +825,7 @@ components:
         expires_at: {type: [string, "null"], format: date-time}
     Stats:
       type: object
-      required: [gifs, unsorted, tags, trash, bytes_stored, bytes_original, bytes_saved]
+      required: [gifs, unsorted, tags, trash, bytes_stored, bytes_original, bytes_saved, cache_files, cache_bytes, cache_limit]
       properties:
         gifs: {type: integer}
         unsorted: {type: integer}
@@ -822,3 +834,6 @@ components:
         bytes_stored: {type: integer}
         bytes_original: {type: integer}
         bytes_saved: {type: integer}
+        cache_files: {type: integer, description: Converted files currently cached}
+        cache_bytes: {type: integer, description: Disk used by the conversion cache}
+        cache_limit: {type: integer, description: Size at which the least recently used files are evicted}

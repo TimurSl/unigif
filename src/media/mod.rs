@@ -3,6 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
+pub mod convert;
 pub mod ffmpeg;
 pub mod probe;
 pub mod transcode;
@@ -82,13 +83,24 @@ pub enum Variant {
     FullMp4,
     PreviewMp4,
     PosterWebp,
+    // Generated on first request and kept in the evictable cache.
+    FullGif,
+    PreviewGif,
+    FullWebm,
+    FullWebp,
 }
 
 impl Variant {
     pub const STORED: [Variant; 3] = [Self::FullMp4, Self::PreviewMp4, Self::PosterWebp];
+    pub const ON_DEMAND: [Variant; 4] = [Self::FullGif, Self::PreviewGif, Self::FullWebm, Self::FullWebp];
 
     pub fn parse(name: &str) -> Option<Self> {
-        Self::STORED.into_iter().find(|v| v.file_name() == name)
+        Self::STORED.into_iter().chain(Self::ON_DEMAND).find(|v| v.file_name() == name)
+    }
+
+    /// Written once at ingest (as opposed to generated on demand).
+    pub fn is_stored(self) -> bool {
+        Self::STORED.contains(&self)
     }
 
     pub fn file_name(self) -> &'static str {
@@ -96,13 +108,19 @@ impl Variant {
             Self::FullMp4 => "full.mp4",
             Self::PreviewMp4 => "preview.mp4",
             Self::PosterWebp => "poster.webp",
+            Self::FullGif => "full.gif",
+            Self::PreviewGif => "preview.gif",
+            Self::FullWebm => "full.webm",
+            Self::FullWebp => "full.webp",
         }
     }
 
     pub fn content_type(self) -> &'static str {
         match self {
             Self::FullMp4 | Self::PreviewMp4 => "video/mp4",
-            Self::PosterWebp => "image/webp",
+            Self::PosterWebp | Self::FullWebp => "image/webp",
+            Self::FullGif | Self::PreviewGif => "image/gif",
+            Self::FullWebm => "video/webm",
         }
     }
 }
@@ -184,6 +202,9 @@ mod tests {
         assert_eq!(Variant::parse("full.mp4"), Some(Variant::FullMp4));
         assert_eq!(Variant::parse("../full.mp4"), None);
         assert_eq!(Variant::parse("original.gif"), None);
+        assert_eq!(Variant::parse("full.webm"), Some(Variant::FullWebm));
+        assert!(Variant::FullMp4.is_stored() && !Variant::FullGif.is_stored());
+        assert_eq!(Variant::parse("full.png"), None);
     }
 
     #[test]

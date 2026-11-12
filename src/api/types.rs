@@ -23,6 +23,8 @@ pub struct GifObject {
     pub source: SourceObject,
     pub created_at: String,
     pub sorted_at: Option<String>,
+    /// Public share page with OpenGraph tags.
+    pub page_url: String,
     pub media: Option<MediaObject>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duplicate: Option<bool>,
@@ -40,6 +42,17 @@ pub struct MediaObject {
     pub mp4: Option<MediaFile>,
     pub preview_mp4: Option<MediaFile>,
     pub poster: Option<MediaFile>,
+    pub gif: OnDemandFile,
+    pub preview_gif: OnDemandFile,
+    pub webm: OnDemandFile,
+    pub webp: OnDemandFile,
+}
+
+/// A variant that is converted the first time its URL is fetched.
+#[derive(Debug, Serialize)]
+pub struct OnDemandFile {
+    pub url: String,
+    pub on_demand: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -57,6 +70,10 @@ pub fn rfc3339(ms: i64) -> String {
         .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string())
 }
 
+pub fn page_url(cfg: &Config, id: &str) -> String {
+    format!("{}/g/{id}", cfg.base_url())
+}
+
 pub fn media_url(cfg: &Config, id: &str, variant: &str) -> String {
     format!("{}/m/{id}/{variant}", cfg.base_url())
 }
@@ -71,11 +88,17 @@ impl GifObject {
                 bytes: v.bytes,
             })
         };
+        let lazy = |name: &str| OnDemandFile { url: media_url(cfg, &row.id, name), on_demand: true };
         let media = (row.status == "ready").then(|| MediaObject {
             mp4: file("full.mp4"),
             preview_mp4: file("preview.mp4"),
             poster: file("poster.webp"),
+            gif: lazy("full.gif"),
+            preview_gif: lazy("preview.gif"),
+            webm: lazy("full.webm"),
+            webp: lazy("full.webp"),
         });
+        let page = page_url(cfg, &row.id);
         Self {
             thumbhash: row.thumbhash.as_deref().map(|t| STANDARD_NO_PAD.encode(t)),
             source: SourceObject { kind: row.source, id: row.source_id },
@@ -89,6 +112,7 @@ impl GifObject {
             width: row.width,
             height: row.height,
             duration_ms: row.duration_ms,
+            page_url: page,
             media,
             duplicate: None,
         }

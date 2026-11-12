@@ -63,6 +63,24 @@ pub fn parse_range(header: Option<&str>, len: u64) -> RangeSpec {
     }
 }
 
+/// Open a stored variant, or an on-demand one (converting it first if it is
+/// not cached yet).
+async fn open_variant(app: &App, row: &gifs::GifRow, variant: Variant) -> Result<tokio::fs::File, ApiError> {
+    if variant.is_stored() {
+        let path = media::gif_dir(&app.cfg.media_dir(), &row.id).join(variant.file_name());
+        return tokio::fs::File::open(&path).await.map_err(|_| ApiError::NotFound("no such media"));
+    }
+    // A concurrent cache trim can remove the file between the conversion and
+    // the open; one more round settles it.
+    for _ in 0..2 {
+        let path = crate::cache::ensure(app, row, variant).await?;
+        if let Ok(f) = tokio::fs::File::open(&path).await {
+            return Ok(f);
+        }
+    }
+    Err(ApiError::Internal(anyhow::anyhow!("cached file for {} vanished twice", variant.file_name())))
+}
+
 pub async fn serve(
     State(app): State<App>,
     Path((id, name)): Path<(String, String)>,
@@ -78,8 +96,7 @@ pub async fn serve(
         return Err(ApiError::NotFound("no such media"));
     }
 
-    let path = media::gif_dir(&app.cfg.media_dir(), &id).join(variant.file_name());
-    let mut file = tokio::fs::File::open(&path).await.map_err(|_| ApiError::NotFound("no such media"))?;
+    let mut file = open_variant(&app, &row, variant).await?;
     let len = file.metadata().await.map_err(anyhow::Error::from)?.len();
 
     // Files are written once and never modified, so (id, variant, length)

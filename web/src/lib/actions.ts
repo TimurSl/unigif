@@ -7,6 +7,19 @@ export function gifUrl(g: Gif): string | null {
   return g.media?.mp4 ? new URL(mediaPath(g.media.mp4.url), location.href).href : null;
 }
 
+export type Format = 'mp4' | 'gif' | 'webm' | 'webp';
+
+/** Absolute address of one format. GIF, WebM and WebP are converted the first time they are fetched. */
+export function formatUrl(g: Gif, f: Format): string | null {
+  const url = f === 'mp4' ? g.media?.mp4?.url : g.media?.[f]?.url;
+  return url ? new URL(mediaPath(url), location.href).href : null;
+}
+
+/** The share page: it unfurls in chats (OpenGraph), unlike a bare file address. */
+export function pageUrl(g: Gif): string {
+  return new URL(mediaPath(g.page_url), location.href).href;
+}
+
 export async function copyText(label: string, text: string) {
   try {
     await navigator.clipboard.writeText(text);

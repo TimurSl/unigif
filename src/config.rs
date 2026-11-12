@@ -78,6 +78,16 @@ pub struct Config {
     pub cors: CorsConfig,
     pub fetch: FetchConfig,
     pub trash: TrashConfig,
+    pub cache: CacheConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CacheConfig {
+    /// Upper bound for the on-demand conversion cache; the least recently
+    /// used files are evicted beyond it. `0` disables caching beyond the
+    /// file currently being served.
+    pub max_size: ByteSize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,6 +108,17 @@ pub struct MediaConfig {
     pub preset: String,
     pub long_edge: u32,
     pub max_fps: u32,
+    /// On-demand `full.gif`: widest edge in pixels and frame-rate cap.
+    pub gif_width: u32,
+    pub gif_fps: u32,
+    /// On-demand `preview.gif`.
+    pub preview_gif_width: u32,
+    pub preview_gif_fps: u32,
+    /// On-demand `full.webp`: widest edge in pixels, quality 0-100.
+    pub webp_width: u32,
+    pub webp_quality: u8,
+    /// On-demand `full.webm` (VP9 constant quality, lower is better).
+    pub webm_crf: u8,
     pub preview_crf: u8,
     pub preview_height: u32,
     pub max_width: u32,
@@ -190,6 +211,12 @@ impl Default for FetchConfig {
     }
 }
 
+impl Default for CacheConfig {
+    fn default() -> Self {
+        Self { max_size: ByteSize(2 * 1024 * 1024 * 1024) }
+    }
+}
+
 impl Default for TrashConfig {
     fn default() -> Self {
         Self { retention_days: 30 }
@@ -210,6 +237,7 @@ impl Default for Config {
             cors: CorsConfig::default(),
             fetch: FetchConfig::default(),
             trash: TrashConfig::default(),
+            cache: CacheConfig::default(),
         }
     }
 }
@@ -229,6 +257,13 @@ impl Default for MediaConfig {
             preset: "slow".into(),
             long_edge: 720,
             max_fps: 30,
+            gif_width: 480,
+            gif_fps: 15,
+            preview_gif_width: 220,
+            preview_gif_fps: 10,
+            webp_width: 480,
+            webp_quality: 70,
+            webm_crf: 33,
             preview_crf: 28,
             preview_height: 200,
             max_width: 4096,
@@ -270,6 +305,20 @@ impl Config {
         if self.media.long_edge < 16 || self.media.preview_height < 16 {
             bail!("media.longEdge and media.previewHeight must be at least 16");
         }
+        for (name, v) in [
+            ("gifWidth", self.media.gif_width),
+            ("gifFps", self.media.gif_fps),
+            ("previewGifWidth", self.media.preview_gif_width),
+            ("previewGifFps", self.media.preview_gif_fps),
+            ("webpWidth", self.media.webp_width),
+        ] {
+            if v == 0 {
+                bail!("media.{name} must be at least 1");
+            }
+        }
+        if self.media.webp_quality > 100 || self.media.webm_crf > 63 {
+            bail!("media.webpQuality is 0-100 and media.webmCrf is 0-63");
+        }
         if self.auth.session_days == 0 {
             bail!("auth.sessionDays must be at least 1");
         }
@@ -297,6 +346,10 @@ impl Config {
     }
     pub fn db_path(&self) -> PathBuf {
         self.data_dir.join("unigif.db")
+    }
+    /// Where on-demand conversions of one GIF live.
+    pub fn cache_gif_dir(&self, id: &str) -> PathBuf {
+        crate::media::gif_dir(&self.cache_dir, id)
     }
     /// Base for absolute URLs, without a trailing slash.
     pub fn base_url(&self) -> &str {

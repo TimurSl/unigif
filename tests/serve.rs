@@ -90,7 +90,7 @@ async fn only_known_variants_of_known_ids_are_served() {
         format!("/m/{id}/..%2F..%2Funigif.db"),
         "/m/AAAAAAAAAAAA/full.mp4".to_string(),
         "/m/..%2F..%2Fetc/full.mp4".to_string(),
-        format!("/m/{id}/full.gif"), // on-demand variants arrive in milestone 5
+        format!("/m/{id}/full.png"),
     ] {
         let resp = h.send(Request::get(&bad).body(Body::empty()).unwrap()).await;
         assert_eq!(resp.status(), StatusCode::NOT_FOUND, "{bad}");
