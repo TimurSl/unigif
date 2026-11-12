@@ -2,7 +2,7 @@
 
 A self-hosted, hashtag-first GIF library with a scoped-key API, MP4-based storage, a keyboard-driven sorting flow, a mobile UI, and first-class NixOS packaging. Built so that Telegram clients, bots, and your own social network can use it as a GIF provider.
 
-Status: **M0, M1, M2 and M3 are implemented** (see section 13 for what that covers and where the code departs from this text). Stack, media visibility, tenancy, originals policy, and licence are confirmed by the owner (section 14). Items marked **(verify)** are facts I could not fully confirm during research and must be checked when that part is built.
+Status: **M0 to M6 are implemented** (see section 13 for what that covers and where the code departs from this text). Stack, media visibility, tenancy, originals policy, and licence are confirmed by the owner (section 14). Items marked **(verify)** are facts I could not fully confirm during research and must be checked when that part is built.
 
 ---
 
@@ -890,10 +890,10 @@ Sizes are relative (S / M / L), not time estimates.
 | M3 ✅ | **Web UI**: login, Library, search, Unsorted, tag sheet with every key in 9.4, upload by drag and paste, detail view | L | An end-to-end test sorts three GIFs using only the keyboard |
 | M4 ✅ | **Mobile and PWA**: responsive layout, bottom bar, full-screen tag sheet, gestures, installable, Android share target | M | The same sorting test passes in a phone viewport; a shared GIF lands in Unsorted |
 | M5 ✅ | **Conversion**: on-demand GIF / WebM / WebP, cache with eviction, share page with OpenGraph, storage stats | M | `full.gif` is generated once and served from cache after; the cache stays under its limit |
-| M6 | **NixOS**: module, hardening, nginx integration, backup timer, VM test, deployment guide | M | The VM test in 10.4 passes; the service runs on the VPS |
+| M6 ✅ | **NixOS**: module, hardening, nginx integration, backup timer, VM test, deployment guide | M | The VM test in 10.4 passes; the service runs on the VPS |
 | M7 | **Polish**: hashtag management (rename, merge), trash, batch select, co-occurrence suggestions, live updates over SSE, API key screen refinements | M | Renaming or merging a hashtag updates every GIF; a GIF added through the API appears in an open Unsorted tab without a reload |
 
-### 13.1 Implementation notes (M0 to M5)
+### 13.1 Implementation notes (M0 to M6)
 
 Built in this order, and verified by `cargo test` (46 unit tests and 68 integration tests, with real ffmpeg), `cargo clippy -D warnings`, a curl run against the real binary, `nix build`, and for M3 to M5 `svelte-check` plus the Playwright suite in `web/e2e`.
 
@@ -960,6 +960,16 @@ Built in this order, and verified by `cargo test` (46 unit tests and 68 integrat
 - **Tests.** `tests/convert.rs` (15): every format is the right codec and size and is converted exactly once; Range / ETag on a converted file; six concurrent requests get one identical file and one cache row; a zero-second budget gives a `500`, leaves no files and does not wedge the in-flight map; transparency survives in GIF (checked by decoding) and WebP (checked in the container); eviction order (A is evicted first, then C after B is used again) and the byte limit; the janitor trim; a wiped cache directory; purge and trash; the share page tags, escaping and redirects. One more Playwright test copies each format's link and fetches it without credentials.
 - **Known limits.** ffmpeg 6.x cannot decode an animated WebP (see M1), so the WebP tests read the RIFF container (animation flag, alpha flag, canvas size, frame count) instead of decoding it. Not done: a per-GIF "convert now" warm-up, and `Cache-Control` for converted files stays `immutable` although a file rebuilt after eviction could differ by a few bytes (the `ETag` includes the length, so a changed file is a different validator).
 
+**M6, NixOS: done**, with these departures from the text above:
+
+- **Module** (`nix/module.nix`, exported as `nixosModules.default`, which takes the flake so `package` defaults to its own build). Options as in 10.2, plus `resources.memoryMax` (default `2G`) and `resources.tasksMax` (default `512`). `settings` is merged over values derived from the other options and may not set `publicUrl`, `listen`, `dataDir`, `cacheDir` or `auth.initialOwner` (assertions). The owner's password file goes through `LoadCredential`, so root-owned agenix / sops-nix paths work. With `nginx.enable` the module sets `auth.trustedProxies` to loopback. nginx gets `client_max_body_size` of `upload.maxSize` plus the 1 MiB multipart allowance the API already grants, `proxy_request_buffering off`, and a separate unbuffered location for `/api/v1/events`. A `unigif-ctl` wrapper runs the CLI as the service user with the service's config.
+- **Hardening.** The unit as in 10.3, plus `PrivateUsers`, `ProtectClock`, `ProtectHostname`, `ProtectKernelLogs`, `ProtectProc=invisible`, `MemoryDenyWriteExecute`, `RestrictRealtime`, `RestrictSUIDSGID`, `RemoveIPC`, `DevicePolicy=closed` and `SystemCallFilter=@system-service ~@privileged`. `systemd-analyze security` reports **1.2**, and the VM test fails above 2.0. ffmpeg runs fine under `MemoryDenyWriteExecute`.
+- **Backups.** `unigif backup [--dir] [--keep]` (new subcommand) uses `VACUUM INTO` into a `.partial` file that is renamed when complete, then prunes by name (names carry a UTC timestamp with milliseconds). The timer runs it under the same hardening. Restore is stop, replace `unigif.db`, start; the VM test does exactly that.
+- **Pre-migration snapshots** (deferred from M1 and M2): `db::open` copies the database to `backups/pre-migration-v<version>-<timestamp>.db` when an existing database has migrations pending, keeps the newest five, and refuses to start if the copy fails.
+- **VM test** (`nix/vm-test.nix`, `checks.<system>.vm`): the 10.4 steps through nginx, plus the exposure score, the backup job, the restore and `unigif-ctl`. The first full run was 360 s of test time under software emulation.
+- **Verified here without KVM.** This environment has no `/dev/kvm`, so the test was run with `--option system-features "kvm nixos-test ..."`, which lets QEMU fall back to emulation. The encoder preset is left at the default, so the size check is realistic, and the test polls until the GIF is ready. CI enables KVM on the runner.
+- **Not done.** `aarch64-linux` was evaluated, not built. A deployment on the real VPS is the owner's step: `docs/deployment.md` is the guide.
+
 ### Third-party search (added after M5)
 
 - **Providers.** KLIPY and GIPHY, via `src/search`. Tenor is left out: its developer API closed on 30 June 2026. The server calls the providers (keys never reach the browser) and normalises each result to `{id, title, width, height, preview{url, kind}, download{url, format, bytes}, page_url}`. The download is the original GIF, or the MP4 when the GIF is over `upload.maxSize`.
@@ -968,7 +978,7 @@ Built in this order, and verified by `cargo test` (46 unit tests and 68 integrat
 - **CSP.** `img-src` and `media-src` now allow `https:`, because previews load straight from the providers' CDNs.
 - **Not verified against the live APIs.** The response shapes were written from the providers' public descriptions without access to their documentation or a key from this environment; check a real search with each key and adjust `parse_giphy` / `parse_klipy` if a field differs.
 
-M0 to M6 are the "storage accessor" you asked for first. Packaging is kept working from M0 onward; M6 finishes and hardens it rather than starting it.
+M0 to M6 are the "storage accessor" you asked for first.
 
 **Later, not scheduled**: Telegram integration (section 11), a Tenor/Klipy-shaped adapter, and wiring Unigif into the social network as its GIF provider.
 
