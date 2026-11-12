@@ -69,6 +69,27 @@ export interface Stats {
   cache_limit: number;
 }
 
+export type ProviderId = 'klipy' | 'giphy';
+
+export interface SearchProvider {
+  id: ProviderId;
+  name: string;
+  configured: boolean;
+  key_source: 'settings' | 'config' | null;
+  /** Where to get an API key. */
+  keys_url: string;
+}
+
+export interface SearchItem {
+  id: string;
+  title: string;
+  width: number | null;
+  height: number | null;
+  page_url: string | null;
+  preview: { url: string; kind: 'video' | 'image' };
+  download: { url: string; format: 'gif' | 'mp4'; bytes: number | null };
+}
+
 export interface Page<T> {
   items: T[];
   next_cursor: string | null;
@@ -162,6 +183,23 @@ export const api = {
     request<Gif>('POST', `/gifs${qs({ source: 'web', wait: 0 })}`, {
       raw: file,
       headers: { 'Content-Type': type || 'application/octet-stream' },
+    }),
+  searchProviders: () => request<{ items: SearchProvider[] }>('GET', '/search/providers'),
+  search: (p: { provider: ProviderId; q?: string; cursor?: string | null; limit?: number }) =>
+    request<Page<SearchItem>>('GET', `/search${qs({ ...p })}`),
+  setProviderKey: (id: ProviderId, key: string | null) =>
+    request<SearchProvider>('PUT', `/search/providers/${id}/key`, { body: { key } }),
+  /** Download a search result into the library. It lands in Unsorted unless hashtags are given. */
+  addFromSearch: (provider: ProviderId, item: SearchItem, tags: string[]) =>
+    request<Gif>('POST', '/gifs', {
+      body: {
+        url: item.download.url,
+        source: provider,
+        source_id: item.id,
+        description: item.title || undefined,
+        tags: tags.length ? tags : undefined,
+        wait: 0,
+      },
     }),
   addUrl: (url: string) => request<Gif>('POST', '/gifs', { body: { url, source: 'url', wait: 0 } }),
 };

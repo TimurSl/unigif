@@ -79,6 +79,7 @@ pub struct Config {
     pub fetch: FetchConfig,
     pub trash: TrashConfig,
     pub cache: CacheConfig,
+    pub search: SearchConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -187,6 +188,45 @@ pub struct TrashConfig {
     pub retention_days: u32,
 }
 
+/// Third-party GIF search. The API keys can also be entered in Settings (those win).
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SearchConfig {
+    pub giphy_api_key: Option<String>,
+    pub klipy_api_key: Option<String>,
+    pub giphy_base_url: String,
+    pub klipy_base_url: String,
+    /// GIPHY content rating: `g`, `pg`, `pg-13` or `r`.
+    pub rating: String,
+    pub timeout_secs: u64,
+}
+
+// Hand-written so that a stray `{:?}` never prints an API key.
+impl std::fmt::Debug for SearchConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SearchConfig")
+            .field("giphy_api_key", &self.giphy_api_key.as_ref().map(|_| "<set>"))
+            .field("klipy_api_key", &self.klipy_api_key.as_ref().map(|_| "<set>"))
+            .field("giphy_base_url", &self.giphy_base_url)
+            .field("klipy_base_url", &self.klipy_base_url)
+            .field("rating", &self.rating)
+            .finish()
+    }
+}
+
+impl Default for SearchConfig {
+    fn default() -> Self {
+        Self {
+            giphy_api_key: None,
+            klipy_api_key: None,
+            giphy_base_url: "https://api.giphy.com/v1".into(),
+            klipy_base_url: "https://api.klipy.com/api/v1".into(),
+            rating: "pg-13".into(),
+            timeout_secs: 15,
+        }
+    }
+}
+
 impl Default for AuthConfig {
     fn default() -> Self {
         Self { initial_owner: InitialOwner::default(), session_days: 30, trusted_proxies: vec![] }
@@ -238,6 +278,7 @@ impl Default for Config {
             fetch: FetchConfig::default(),
             trash: TrashConfig::default(),
             cache: CacheConfig::default(),
+            search: SearchConfig::default(),
         }
     }
 }
@@ -324,6 +365,9 @@ impl Config {
         }
         if self.rate_limit.read_per_min == 0 || self.rate_limit.upload_per_min == 0 {
             bail!("rateLimit values must be at least 1");
+        }
+        if !["g", "pg", "pg-13", "r"].contains(&self.search.rating.as_str()) {
+            bail!("search.rating must be g, pg, pg-13 or r");
         }
         for p in &self.auth.trusted_proxies {
             if p.parse::<std::net::IpAddr>().is_err() {

@@ -12,6 +12,7 @@ The full design is in [`PLAN.md`](PLAN.md). **Status:** milestones M0 (skeleton)
 - **The API** (`/api/v1`, documented in [`api/openapi.yaml`](api/openapi.yaml), served at `/api/v1/openapi.json` with a rendered reference at `/api/docs`): list and search (`q=cat funny`, `-dog`, prefix on the last word, cursor pagination), edit and tag, trash and restore (purged after 30 days), the unsorted queue (`/gifs/unsorted/next`), batch edits, hashtag list / suggest / rename / merge / delete, usage pings for `sort=used`, stats, and a server-sent event stream.
 - **Auth:** the owner logs in with a password (Argon2id) and gets a `HttpOnly` session cookie; everything else uses scoped API keys (`read`, `upload`, `tag`, `delete`, `admin`) that can also hide hashtags (`deny_tags`), carry an expiry and a rate limit. Cookie writes are CSRF-protected, logins are throttled, keys are rate-limited with `RateLimit-*` headers.
 - **Web UI** (embedded in the binary, served at `/`): sign in, a virtualised masonry **Library** with hashtag search (`cat funny`, `-dog`; `/` focuses the box) and a hashtag sidebar, an **Unsorted** queue, and the **tag sheet** for sorting with the keyboard only: type a hashtag, `Space` makes a chip, `Tab` accepts a suggestion, `Enter` saves and moves to the next GIF, `Alt+1…9` toggles a recent hashtag, `Alt+0` repeats the last GIF's hashtags, `Alt+←/→` goes back or skips, `Shift+Delete` trashes (with Undo), `Esc` closes. Upload by button, drag and drop, or pasting a file or link; a detail view per GIF.
+- **Search** (the Search tab, `GET /api/v1/search`): look up GIFs at **KLIPY** and **GIPHY** (trending when the box is empty) and save any result to the library with one click, optionally with hashtags; without them it lands in Unsorted. The server makes the calls, so API keys never reach the browser. Enter them in **Settings → GIF search**, or in the config file. A result is added through the ordinary quick add by URL, so it is deduplicated (by content and by provider + id), size-limited and SSRF-checked like any other URL. **Tenor** is not offered: Google shut its developer API down on 30 June 2026.
 - **CLI:** `serve`, `doctor`, `import <dir> [--tags-from-folders]`, `user add|passwd`, `key create|list|revoke`.
 
 ## Run it
@@ -101,6 +102,11 @@ retentionDays = 30
 
 [cache]
 maxSize = "2GiB"          # on-demand conversions; safe to delete the directory at any time
+
+[search]                              # keys entered in Settings win over these
+giphyApiKey = "…"
+klipyApiKey = "…"
+rating = "pg-13"                      # GIPHY content rating: g | pg | pg-13 | r
 
 [media]
 keepOriginals = "alpha"   # alpha | never | always

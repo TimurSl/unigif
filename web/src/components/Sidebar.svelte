@@ -22,6 +22,12 @@
         {#if app.stats && app.stats.unsorted > 0}<span class="badge" data-testid="unsorted-count">{app.stats.unsorted}</span>{/if}
       </a>
     </li>
+    <li>
+      <a class="tab" href="/search" class:current={route.view === 'search'} onclick={(e) => linkClick(e, '/search')}>
+        <svg class="ico" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
+        <span>Search</span>
+      </a>
+    </li>
     <li class="phone-only">
       <button class="tab" type="button" onclick={onadd}>
         <svg class="ico" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
@@ -199,7 +205,7 @@
     }
     .main {
       display: flex;
-      flex: 3;
+      flex: 4;
     }
     .main li {
       flex: 1;

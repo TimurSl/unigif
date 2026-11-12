@@ -239,10 +239,10 @@ test('phone: shared text without a link says so instead of failing silently', as
   await expect(page.getByText('the shared text had no link')).toBeVisible();
 });
 
-test('phone: the tab bar has Library, Unsorted, Add and Settings; Settings can sign out', async ({ page }) => {
+test('phone: the tab bar has Library, Unsorted, Search, Add and Settings; Settings can sign out', async ({ page }) => {
   await login(page);
   const bar = tabBar(page);
-  for (const name of ['Library', 'Unsorted', 'Add', 'Settings']) {
+  for (const name of ['Library', 'Unsorted', 'Search', 'Add', 'Settings']) {
     const item = bar.getByText(name, { exact: true });
     await expect(item).toBeVisible();
     expect((await item.locator('xpath=ancestor-or-self::a|ancestor-or-self::button').first().boundingBox())!.height).toBeGreaterThanOrEqual(44);

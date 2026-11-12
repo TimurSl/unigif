@@ -1,5 +1,7 @@
 // Starts a throwaway unigif instance for the end-to-end tests and writes the fixture GIFs.
 import { spawn, spawnSync } from 'node:child_process';
+import { createServer } from 'node:http';
+import { readFileSync } from 'node:fs';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -37,6 +39,44 @@ console.log(`e2e fixtures in ${fixtures}`);
 writeFileSync(join(dir, 'password'), 'e2e-password-1\n');
 const add = spawnSync(bin, ['user', 'add', 'e2e', '--password-file', join(dir, 'password')], { env, stdio: 'inherit' });
 if (add.status !== 0) throw new Error('could not create the e2e user');
+
+// The search suite talks to a stand-in for GIPHY (a real one needs a key and the internet).
+if (process.env.E2E_PROVIDER) {
+  const mockPort = Number(port) + 100;
+  const gifs = { 'e2e-one': readFileSync(join(fixtures, 'fixture-1.gif')), 'e2e-two': readFileSync(join(fixtures, 'fixture-2.gif')) };
+  const base = `http://127.0.0.1:${mockPort}`;
+  createServer((req, res) => {
+    const url = new URL(req.url, base);
+    if (url.pathname === '/files/a.gif') {
+      res.writeHead(200, { 'content-type': 'image/gif' }).end(gifs[url.searchParams.get('id')] ?? gifs['e2e-one']);
+    } else if (url.pathname.startsWith('/giphy/gifs/')) {
+      if (url.searchParams.get('api_key') !== 'e2e-giphy-key') {
+        res.writeHead(403, { 'content-type': 'application/json' }).end('{"message":"invalid key"}');
+        return;
+      }
+      const item = (id, title) => ({
+        id,
+        title,
+        url: `https://giphy.com/gifs/${id}`,
+        images: {
+          original: { url: `${base}/files/a.gif?id=${id}`, width: '160', height: '120', size: String(gifs[id].length) },
+          fixed_width: { url: `${base}/files/a.gif?id=${id}` },
+        },
+      });
+      const q = url.searchParams.get('q') ?? '';
+      res.writeHead(200, { 'content-type': 'application/json' }).end(
+        JSON.stringify({
+          data: [item('e2e-one', `${q || 'trending'} one`), item('e2e-two', `${q || 'trending'} two`)],
+          pagination: { total_count: 2, count: 2, offset: 0 },
+        }),
+      );
+    } else {
+      res.writeHead(404).end();
+    }
+  }).listen(mockPort, '127.0.0.1');
+  env.UNIGIF_SEARCH__GIPHY_BASE_URL = `${base}/giphy`;
+  env.UNIGIF_FETCH__ALLOW_PRIVATE = 'true';
+}
 
 const server = spawn(bin, ['serve'], { env, stdio: 'inherit' });
 server.on('exit', (code) => process.exit(code ?? 1));

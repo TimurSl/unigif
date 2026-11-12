@@ -10,6 +10,7 @@ use sqlx::SqlitePool;
 pub mod gifs;
 pub mod keys;
 pub mod sessions;
+pub mod settings;
 pub mod users;
 
 pub type Db = SqlitePool;

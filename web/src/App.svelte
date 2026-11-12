@@ -8,6 +8,7 @@
   import Detail from './components/Detail.svelte';
   import ListView from './components/ListView.svelte';
   import Login from './components/Login.svelte';
+  import Search from './components/Search.svelte';
   import Settings from './components/Settings.svelte';
   import Sidebar from './components/Sidebar.svelte';
   import Toasts from './components/Toasts.svelte';
@@ -93,6 +94,8 @@
     {#key route.view}
       {#if route.view === 'settings'}
         <Settings />
+      {:else if route.view === 'search'}
+        <Search />
       {:else}
         <ListView view={route.view === 'unsorted' ? 'unsorted' : 'library'} onupload={() => picker?.click()} />
       {/if}

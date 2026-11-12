@@ -960,6 +960,14 @@ Built in this order, and verified by `cargo test` (46 unit tests and 68 integrat
 - **Tests.** `tests/convert.rs` (15): every format is the right codec and size and is converted exactly once; Range / ETag on a converted file; six concurrent requests get one identical file and one cache row; a zero-second budget gives a `500`, leaves no files and does not wedge the in-flight map; transparency survives in GIF (checked by decoding) and WebP (checked in the container); eviction order (A is evicted first, then C after B is used again) and the byte limit; the janitor trim; a wiped cache directory; purge and trash; the share page tags, escaping and redirects. One more Playwright test copies each format's link and fetches it without credentials.
 - **Known limits.** ffmpeg 6.x cannot decode an animated WebP (see M1), so the WebP tests read the RIFF container (animation flag, alpha flag, canvas size, frame count) instead of decoding it. Not done: a per-GIF "convert now" warm-up, and `Cache-Control` for converted files stays `immutable` although a file rebuilt after eviction could differ by a few bytes (the `ETag` includes the length, so a changed file is a different validator).
 
+### Third-party search (added after M5)
+
+- **Providers.** KLIPY and GIPHY, via `src/search`. Tenor is left out: its developer API closed on 30 June 2026. The server calls the providers (keys never reach the browser) and normalises each result to `{id, title, width, height, preview{url, kind}, download{url, format, bytes}, page_url}`. The download is the original GIF, or the MP4 when the GIF is over `upload.maxSize`.
+- **Keys.** `settings` table (migration 0002), written by `PUT /search/providers/{id}/key` (login session only, never returned), with `search.giphyApiKey` / `search.klipyApiKey` in the config file as a fallback. Both base URLs are configurable (`search.giphyBaseUrl`, `search.klipyBaseUrl`) and the tests run against a local stand-in.
+- **Adding a result** is the existing quick add by URL (`source: giphy | klipy`, `source_id`), so dedup, limits and SSRF protection are unchanged.
+- **CSP.** `img-src` and `media-src` now allow `https:`, because previews load straight from the providers' CDNs.
+- **Not verified against the live APIs.** The response shapes were written from the providers' public descriptions without access to their documentation or a key from this environment; check a real search with each key and adjust `parse_giphy` / `parse_klipy` if a field differs.
+
 M0 to M6 are the "storage accessor" you asked for first. Packaging is kept working from M0 onward; M6 finishes and hardens it rather than starting it.
 
 **Later, not scheduled**: Telegram integration (section 11), a Tenor/Klipy-shaped adapter, and wiring Unigif into the social network as its GIF provider.

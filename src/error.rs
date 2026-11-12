@@ -31,6 +31,10 @@ pub enum ApiError {
     #[error("{0}")]
     FetchFailed(String),
     #[error("{0}")]
+    NotConfigured(String),
+    #[error("{0}")]
+    Upstream(String),
+    #[error("{0}")]
     NotImplemented(&'static str),
     #[error("internal error")]
     Internal(#[from] anyhow::Error),
@@ -53,6 +57,8 @@ impl ApiError {
             }
             Self::InvalidMedia(_) => (StatusCode::UNPROCESSABLE_ENTITY, "invalid_media", "Invalid media"),
             Self::FetchFailed(_) => (StatusCode::BAD_GATEWAY, "fetch_failed", "Could not fetch the URL"),
+            Self::NotConfigured(_) => (StatusCode::CONFLICT, "not_configured", "Provider not configured"),
+            Self::Upstream(_) => (StatusCode::BAD_GATEWAY, "provider_error", "The search provider failed"),
             Self::NotImplemented(_) => (StatusCode::NOT_IMPLEMENTED, "not_implemented", "Not implemented"),
             Self::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal", "Internal server error"),
         }
