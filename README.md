@@ -2,7 +2,7 @@
 
 A self-hosted, hashtag-first GIF library. Every GIF carries hashtags; new ones land in **Unsorted** and leave it the moment they get their first hashtag. GIFs are stored as small H.264 MP4s and served in whatever format a client needs, through a documented HTTP API with scoped keys.
 
-The full design is in [`PLAN.md`](PLAN.md). **Status:** milestones M0 (skeleton), M1 (storage core), M2 (auth and API), M3 (web UI) and M4 (mobile layout and installable PWA with an Android share target) are implemented; the rest follow the plan's milestone order.
+The full design is in [`PLAN.md`](PLAN.md). **Status:** milestones M0 (skeleton), M1 (storage core), M2 (auth and API), M3 (web UI), M4 (mobile layout and installable PWA with an Android share target) and M5 (on-demand GIF / WebM / WebP, cache, share page) are implemented; the rest follow the plan's milestone order.
 
 ## What works today
 
@@ -46,6 +46,8 @@ curl -X POST "http://127.0.0.1:8787/api/v1/gifs?tags=cat,funny&source=telegram&s
 Or let the server fetch it: `-H "Content-Type: application/json" -d '{"url": "https://example.com/cat.gif", "tags": ["cat"]}'`.
 
 Sending the same bytes (or the same `source_id`) again returns `200` with `"duplicate": true` and merges any new tags. `?wait=<seconds>` (default 10) bounds how long the call waits for processing; otherwise you get `status: "processing"` and can poll `GET /api/v1/gifs/{id}`.
+
+Every GIF is stored as MP4. For a client that needs a real GIF, the object lists `media.gif`, `media.preview_gif`, `media.webm` and `media.webp`: each is converted the first time its URL is fetched, then served from a size-bounded cache (`cache.maxSize`, least recently used files go first). `page_url` (`/g/{id}`) is a public page with OpenGraph tags, so a pasted link unfurls in chats; `/g/{id}.mp4`, `.gif`, `.webm` and `.webp` redirect to the file.
 
 Look things up:
 
@@ -96,6 +98,9 @@ timeoutSecs = 30
 
 [trash]
 retentionDays = 30
+
+[cache]
+maxSize = "2GiB"          # on-demand conversions; safe to delete the directory at any time
 
 [media]
 keepOriginals = "alpha"   # alpha | never | always

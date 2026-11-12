@@ -4,25 +4,6 @@ mod common;
 use axum::http::StatusCode;
 use common::*;
 
-/// A red square on a genuinely transparent background. Only a palette with a
-/// reserved transparent entry yields a GIF that really has alpha.
-fn transparent_gif_fixture(path: &std::path::Path) {
-    ffmpeg(&[
-        "-f",
-        "lavfi",
-        "-i",
-        "color=c=black@0:s=80x80:r=10:d=1,format=rgba",
-        "-f",
-        "lavfi",
-        "-i",
-        "color=c=red@1:s=40x40:r=10:d=1,format=rgba",
-        "-filter_complex",
-        "[0:v][1:v]overlay=20:20:format=auto,format=rgba,split[a][b];\
-         [a]palettegen=reserve_transparent=1[p];[b][p]paletteuse",
-        path.to_str().unwrap(),
-    ]);
-}
-
 #[tokio::test]
 async fn quick_add_gif_produces_all_stored_variants() {
     // Default encoder preset here, so the size comparison below is realistic.

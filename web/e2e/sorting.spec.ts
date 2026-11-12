@@ -136,3 +136,44 @@ test('detail: edit hashtags, then delete with undo', async ({ page }) => {
   await page.getByRole('button', { name: 'Undo' }).click();
   await expect(page.getByRole('button', { name: /GIF tagged #cat/ })).toHaveCount(1);
 });
+
+test('detail: copy a link in every format, open the share page, see the converted copies in Settings', async ({ page }) => {
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await login(page);
+  await page.getByRole('searchbox', { name: 'Search hashtags' }).fill('cat ');
+  await page.getByRole('button', { name: /GIF tagged #cat/ }).click();
+  const detail = page.getByRole('dialog', { name: 'GIF details' });
+  const copied = () => page.evaluate(() => navigator.clipboard.readText());
+
+  const types: Record<string, string> = { MP4: 'video/mp4', GIF: 'image/gif', WebM: 'video/webm', WebP: 'image/webp' };
+  const file: Record<string, string> = { MP4: 'full.mp4', GIF: 'full.gif', WebM: 'full.webm', WebP: 'full.webp' };
+  let id = '';
+  for (const [label, type] of Object.entries(types)) {
+    await detail.getByRole('button', { name: label, exact: true }).click();
+    await expect(page.getByRole('status').filter({ hasText: `${label} link copied` })).toBeVisible();
+    const url = await copied();
+    const m = url.match(/\/m\/([1-9A-HJ-NP-Za-km-z]{12})\/(.+)$/);
+    expect(m, url).not.toBeNull();
+    expect(m![2]).toBe(file[label]);
+    id = m![1];
+    // The address works with no credentials at all, and the converted formats are real files.
+    const res = await page.context().request.get(url, { headers: { cookie: '' } });
+    expect(res.status(), url).toBe(200);
+    expect(res.headers()['content-type']).toBe(type);
+    expect((await res.body()).length).toBeGreaterThan(100);
+  }
+
+  // "Link" is the share page, which unfurls in chats.
+  await detail.getByRole('button', { name: 'Link', exact: true }).click();
+  const share = await copied();
+  expect(share).toMatch(new RegExp(`/g/${id}$`));
+  const html = await (await page.request.get(share)).text();
+  expect(html).toContain('property="og:video"');
+  expect(html).toContain(`/m/${id}/full.mp4`);
+
+  // Settings lists the converted files.
+  await page.keyboard.press('Escape');
+  await page.goto('/settings');
+  await expect(page.getByText(/Converted copies/)).toBeVisible();
+  await expect(page.getByText(/[1-9]\d* files, .* of 2\.0 GB/)).toBeVisible();
+});

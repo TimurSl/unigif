@@ -1,4 +1,4 @@
-//! Housekeeping: purge old trash, drop expired sessions.
+//! Housekeeping: purge old trash, drop expired sessions, trim the cache.
 
 use std::time::Duration;
 
@@ -20,6 +20,7 @@ pub async fn purge_trash(app: &App, now: i64) -> Result<usize> {
     for id in &ids {
         // Files first: a crash in between leaves a row that is purged next time.
         let _ = tokio::fs::remove_dir_all(media::gif_dir(&app.cfg.media_dir(), id)).await;
+        crate::cache::remove_gif(app, id).await;
         let _ = tokio::fs::remove_file(crate::ingest::worker::source_path(&app.cfg, id)).await;
         let mut tx = crate::db::begin_write(&app.db).await?;
         // Trashed GIFs no longer count in tags.gif_count, so only the rows go.
@@ -40,8 +41,14 @@ pub async fn run_once(app: &App) -> Result<()> {
     let now = now_ms();
     let purged = purge_trash(app, now).await?;
     let sessions = sessions::purge_expired(&app.db, now).await?;
-    if purged > 0 || sessions > 0 {
-        tracing::info!(purged_gifs = purged, expired_sessions = sessions, "janitor");
+    let evicted = crate::cache::evict(app, None).await?;
+    if purged > 0 || sessions > 0 || evicted > 0 {
+        tracing::info!(
+            purged_gifs = purged,
+            expired_sessions = sessions,
+            evicted_cache_files = evicted,
+            "janitor"
+        );
     }
     Ok(())
 }

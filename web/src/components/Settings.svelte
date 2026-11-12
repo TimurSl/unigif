@@ -22,7 +22,10 @@
         <dt>GIFs</dt><dd>{app.stats.gifs}</dd>
         <dt>Stored</dt><dd>{size(app.stats.bytes_stored)}</dd>
         <dt>Saved by conversion</dt><dd>{size(app.stats.bytes_saved)}</dd>
+        <dt>Converted copies</dt>
+        <dd>{app.stats.cache_files} files, {size(app.stats.cache_bytes)} of {size(app.stats.cache_limit)}</dd>
       </dl>
+      <p class="hint">GIF, WebM and WebP are made the first time they are asked for. The oldest are removed when the limit is reached; they are rebuilt on demand.</p>
     </div>
   {/if}
 
@@ -84,6 +87,11 @@
     grid-template-columns: auto 1fr;
     gap: 4px 16px;
     margin: 0;
+  }
+  .hint {
+    margin: 12px 0 0;
+    font-size: 12px;
+    color: var(--text-faint);
   }
   dt {
     color: var(--text-muted);

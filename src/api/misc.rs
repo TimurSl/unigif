@@ -22,6 +22,7 @@ pub async fn stats(State(app): State<App>, Auth(p): Auth) -> Result<Json<Value>,
     p.require(Scope::Read)?;
     let vis = p.visibility();
     let t = gifs::totals(&app.db, &vis).await?;
+    let (cache_files, cache_bytes) = crate::cache::totals(&app.db, &vis).await?;
     Ok(Json(json!({
         "gifs": t.gifs,
         "unsorted": t.unsorted,
@@ -30,6 +31,9 @@ pub async fn stats(State(app): State<App>, Auth(p): Auth) -> Result<Json<Value>,
         "bytes_stored": t.bytes_stored,
         "bytes_original": t.bytes_original,
         "bytes_saved": (t.bytes_original - t.bytes_stored).max(0),
+        "cache_files": cache_files,
+        "cache_bytes": cache_bytes,
+        "cache_limit": app.cfg.cache.max_size.0,
     })))
 }
 

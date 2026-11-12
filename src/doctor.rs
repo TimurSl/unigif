@@ -21,7 +21,7 @@ impl Report {
 /// Encoders the pipeline needs, with what each is used for.
 const REQUIRED_ENCODERS: [(&str, &str); 2] =
     [("libx264", "full.mp4 and preview.mp4"), ("libwebp", "poster.webp")];
-/// Needed from milestone 5 on (on-demand GIF / WebM variants); reported but not fatal.
+/// Needed only for the on-demand variants; their absence is reported but not fatal.
 const OPTIONAL_ENCODERS: [(&str, &str); 2] = [("gif", "on-demand GIF"), ("libvpx-vp9", "on-demand WebM")];
 
 pub async fn run(cfg: &Config) -> Result<Report> {
@@ -53,7 +53,7 @@ pub async fn run(cfg: &Config) -> Result<Report> {
                     true,
                     format!(
                         "encoder {name} ({why}): {}",
-                        if has { "present" } else { "missing, needed from milestone 5" }
+                        if has { "present" } else { "missing: the matching on-demand format will fail" }
                     ),
                 );
             }

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api, mediaPath, type Gif } from '../lib/api';
-  import { canShare, copyText, gifUrl, shareGif, trashGif } from '../lib/actions';
+  import { canShare, copyText, formatUrl, pageUrl, shareGif, trashGif, type Format } from '../lib/actions';
   import { errorText, onGifEvent } from '../lib/app.svelte';
   import { closeGif, navigate, href } from '../lib/router.svelte';
   import Sorter from './Sorter.svelte';
@@ -55,6 +55,13 @@
     }
   }
 
+  const formats: { id: Format; label: string }[] = [
+    { id: 'mp4', label: 'MP4' },
+    { id: 'gif', label: 'GIF' },
+    { id: 'webm', label: 'WebM' },
+    { id: 'webp', label: 'WebP' },
+  ];
+
   const size = (n: number) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} kB`);
 </script>
 
@@ -97,8 +104,10 @@
             <h3>Copy</h3>
             <div class="row wrap">
               {#if gif.media?.mp4}
-                <button class="btn" type="button" onclick={() => copyText('Link', gifUrl(gif!)!)}>Link</button>
-                <button class="btn" type="button" onclick={() => copyText('MP4 link', gifUrl(gif!)!)}>MP4</button>
+                <button class="btn" type="button" onclick={() => copyText('Share link', pageUrl(gif!))}>Link</button>
+                {#each formats as f (f.id)}
+                  <button class="btn" type="button" onclick={() => copyText(`${f.label} link`, formatUrl(gif!, f.id)!)}>{f.label}</button>
+                {/each}
                 {#if canShare}<button class="btn" type="button" onclick={() => shareGif(gif!)}>Share</button>{/if}
               {/if}
             </div>

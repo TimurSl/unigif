@@ -20,6 +20,7 @@ mod gifs;
 mod keys;
 mod misc;
 mod session;
+mod share;
 mod tags;
 pub mod types;
 
@@ -95,6 +96,7 @@ pub fn router(app: App) -> Router {
         .nest("/api/v1", api)
         .route("/api/docs", get(misc::docs))
         .route("/m/{id}/{variant}", get(files::serve))
+        .route("/g/{slug}", get(share::page))
         .route("/healthz", get(|| async { "ok" }))
         .route("/readyz", get(readyz))
         .fallback(web::handler)

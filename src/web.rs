@@ -17,7 +17,7 @@ const PLACEHOLDER: &str = "<!doctype html><meta charset=utf-8>\
 /// Serve a built asset, falling back to `index.html` for client-side routes.
 pub async fn handler(uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
-    if path.starts_with("api/") || path.starts_with("m/") {
+    if path.starts_with("api/") || path.starts_with("m/") || path.starts_with("g/") {
         return StatusCode::NOT_FOUND.into_response();
     }
     if let Some(resp) = asset(if path.is_empty() { "index.html" } else { path }) {
