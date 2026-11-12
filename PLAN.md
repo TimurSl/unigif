@@ -2,7 +2,7 @@
 
 A self-hosted, hashtag-first GIF library with a scoped-key API, MP4-based storage, a keyboard-driven sorting flow, a mobile UI, and first-class NixOS packaging. Built so that Telegram clients, bots, and your own social network can use it as a GIF provider.
 
-Status: plan only, no code yet. Items marked **(verify)** are facts I could not fully confirm during research and must be checked when that part is built.
+Status: plan only, no code yet. Stack, media visibility, tenancy, originals policy, and licence are confirmed by the owner (section 14). Items marked **(verify)** are facts I could not fully confirm during research and must be checked when that part is built.
 
 ---
 
@@ -10,20 +10,19 @@ Status: plan only, no code yet. Items marked **(verify)** are facts I could not 
 
 | Area | Decision | Why |
 |---|---|---|
-| Backend | Go, single binary, stdlib `net/http` | One static binary is the easiest thing to package and harden on NixOS; ffmpeg is driven as a subprocess |
-| Database | SQLite (WAL mode), pure-Go driver | One owner, one host; no extra service to run or back up |
+| Backend | Rust, single binary, `axum` on `tokio` | One self-contained binary is the easiest thing to package and harden on NixOS; ffmpeg is driven as a subprocess |
+| Database | SQLite (WAL mode) through `sqlx` | One owner, one host; no extra service to run or back up. Queries are checked at compile time |
 | Media engine | `ffmpeg` / `ffprobe` (`ffmpeg-headless` on NixOS) | Does every conversion needed, both directions |
 | Stored format | H.264 MP4, no audio, `+faststart` | Same format Telegram uses for GIFs, plays everywhere, typically several times smaller than GIF |
 | Other formats | GIF / WebM / animated WebP generated on demand, kept in an evictable cache | Space is spent only on formats somebody actually asks for |
-| Frontend | Svelte 5 + Vite SPA, embedded into the Go binary | The tagging flow is keyboard- and state-heavy; an SPA keeps it instant. Still one deployable artifact |
+| Frontend | Svelte 5 + Vite SPA, embedded into the Rust binary | The tagging flow is keyboard- and state-heavy; an SPA keeps it instant. Still one deployable artifact |
 | Mobile | Responsive PWA (installable, Android share target) | No app store, one codebase |
 | Login | Username + password (Argon2id), server-side sessions | Simple, no third party |
 | API auth | `Authorization: Bearer ugf_…` keys with scopes | Read-only keys for friends, upload-only key for the Telegram hook |
 | Media URLs | Public by unguessable ID, immutable caching | Required for Telegram and social embeds, which fetch without headers. Listing and search always need a key |
 | Tenancy | One library per instance | Friends consume your library; they do not get their own |
 | Packaging | Nix flake: package, NixOS module, dev shell, VM test | Requested |
-
-Section 14 lists the decisions I would like you to confirm before implementation starts.
+| Licence | MIT | Chosen by the owner |
 
 ---
 
@@ -44,7 +43,7 @@ Section 14 lists the decisions I would like you to confirm before implementation
 - A public GIF search engine or trending feed across users.
 - AI auto-tagging (the schema leaves room for it later).
 - Native mobile apps.
-- The Telegram client mod itself. v1 delivers the storage service and the API it will call; section 11 plans the integration that follows.
+- Any Telegram integration (bot, sync daemon, client mods). Deferred by the owner. v1 delivers the storage service and the API those will call; section 11 keeps short notes for later.
 
 **Vocabulary**
 
@@ -102,7 +101,7 @@ No existing project combines tag-first triage, a scoped API, and MP4 storage, wh
 
 ```
                     ┌──────────────────────────── NixOS VPS ────────────────────────────┐
- Browser / PWA ───► │ nginx (TLS, ACME) ──► unigif (Go, 127.0.0.1:8787)                 │
+ Browser / PWA ───► │ nginx (TLS, ACME) ──► unigif (Rust, 127.0.0.1:8787)               │
  Telegram bot  ───► │                        ├─ /            embedded SPA               │
  Client mod    ───► │                        ├─ /api/v1/*    JSON API                   │
  Social network ──► │                        ├─ /m/{id}/*    media (Range, immutable)   │
@@ -114,36 +113,46 @@ No existing project combines tag-first triage, a scoped API, and MP4 storage, wh
                     └───────────────────────────────────────────────────────────────────┘
 ```
 
-One process. Background work (transcoding, cache eviction, trash purge) runs in an in-process worker pool backed by a `jobs` table, so a restart resumes unfinished work.
+One process. Background work (transcoding, cache eviction, trash purge) runs in an in-process worker pool (tokio tasks) backed by a `jobs` table, so a restart resumes unfinished work.
 
 ### 4.1 Repository layout
 
 ```
 unigif/
 ├─ flake.nix  flake.lock
+├─ LICENSE               # MIT
+├─ Cargo.toml  Cargo.lock
 ├─ nix/
-│  ├─ package.nix        # buildNpmPackage (web) + buildGoModule (server)
+│  ├─ package.nix        # buildNpmPackage (web) + rustPlatform.buildRustPackage (server)
 │  ├─ module.nix         # services.unigif
 │  └─ vm-test.nix        # NixOS test: boot, upload, tag, fetch mp4 and gif
-├─ cmd/unigif/           # main: serve | user | key | import | export | gc | doctor
-├─ internal/
-│  ├─ config/            # env + TOML, validation
-│  ├─ db/                # migrations/, queries/ (sqlc), generated code
+├─ src/
+│  ├─ main.rs            # CLI: serve | user | key | import | export | gc | doctor
+│  ├─ config.rs          # env + TOML, validation
+│  ├─ db/                # pool setup, query modules
 │  ├─ auth/              # passwords, sessions, API keys, scopes, rate limits
 │  ├─ media/             # probe, transcode, variants, cache, disk layout
 │  ├─ ingest/            # upload, URL fetch (SSRF-safe), dedupe, jobs
 │  ├─ tags/              # normalisation, suggestions
-│  ├─ api/               # router, handlers, problem+json errors
-│  └─ web/               # go:embed of web/dist
+│  ├─ api/               # router, handlers, extractors, problem+json errors
+│  └─ web.rs             # embedded web/dist, SPA fallback
+├─ migrations/           # SQL migrations, embedded with sqlx::migrate!
+├─ .sqlx/                # committed query metadata, so builds need no live database
+├─ tests/                # integration tests (API, media pipeline)
 ├─ api/openapi.yaml      # written first; source of truth for the API
 ├─ web/                  # Svelte 5 + Vite + TypeScript
 ├─ testdata/             # fixture GIFs and MP4s
 └─ docs/
 ```
 
+A single crate to start. Split into a workspace only if compile times or a second binary (for example a future Telegram daemon) make it worthwhile.
+
 ### 4.2 Libraries
 
-- Go: stdlib router (method + wildcard patterns), `log/slog`, `modernc.org/sqlite` (no CGO), `sqlc` for typed queries, `goose` for embedded migrations, `golang.org/x/crypto/argon2`, `golang.org/x/sync/singleflight`.
+- Server: `axum` and `tower-http` (routing, body limits, compression, CORS), `tokio` (runtime, `tokio::process` for ffmpeg), `sqlx` with bundled SQLite (queries and migrations), `serde`, `clap` (CLI), `figment` (TOML + environment config), `tracing` (structured logs).
+- Auth and crypto: `argon2`, `sha2`, `rand`, `subtle` (constant-time comparison), `governor` (rate limiting).
+- Media helpers: `image` (decode the poster for hashing), `thumbhash`, `infer` (file-type detection from content). All encoding stays in ffmpeg.
+- Other: `reqwest` with a custom DNS resolver for the SSRF-safe URL fetch, `rust-embed` to embed the built web UI, `unicode-normalization` for hashtags.
 - Web: Svelte 5, Vite, TypeScript, Lucide icons. No CSS framework: a single tokens file plus component styles. No web fonts fetched from third parties.
 
 ### 4.3 CLI
@@ -255,13 +264,6 @@ CREATE TABLE variants (
   PRIMARY KEY (gif_id, name)
 ) WITHOUT ROWID;
 
-CREATE TABLE external_refs (                   -- e.g. a Telegram bot file_id for this GIF
-  gif_id   TEXT NOT NULL REFERENCES gifs(id) ON DELETE CASCADE,
-  provider TEXT NOT NULL,
-  ref      TEXT NOT NULL,
-  PRIMARY KEY (gif_id, provider)
-) WITHOUT ROWID;
-
 CREATE TABLE jobs (
   id         INTEGER PRIMARY KEY,
   kind       TEXT NOT NULL,                    -- transcode | purge | evict
@@ -336,7 +338,7 @@ All numbers are settings.
 Rules:
 
 - Only these names exist. There is no free-form `?w=` parameter, so nobody can fill the disk by requesting thousands of sizes.
-- The first request generates the file while the client waits (a short GIF converts in about a second). Concurrent requests for the same file share one conversion (`singleflight`). A global semaphore caps parallel ffmpeg processes (default 2). Hard timeout 30 s.
+- The first request generates the file while the client waits (a short GIF converts in about a second). Concurrent requests for the same file share one conversion (an in-flight map of shared futures). A global semaphore caps parallel ffmpeg processes (default 2). Hard timeout 30 s.
 - Results go to the cache directory. A janitor evicts least-recently-accessed files when the cache exceeds `cache.maxSize` (default 2 GiB). Deleting the whole cache directory is always safe.
 
 Reference commands (to be tuned against the fixtures):
@@ -735,15 +737,21 @@ New key
 
 | Output | Content |
 |---|---|
-| `packages.<system>.unigif` (also `default`) | The server binary with the web UI embedded. `web/` is built with `buildNpmPackage`, the server with `buildGoModule`; `ffmpeg-headless` is wrapped onto its `PATH` |
+| `packages.<system>.unigif` (also `default`) | The server binary with the web UI embedded. `web/` is built with `buildNpmPackage`, the server with `rustPlatform.buildRustPackage` from `Cargo.lock`; `ffmpeg-headless` is wrapped onto its `PATH` |
 | `nixosModules.default` | `services.unigif` |
 | `overlays.default` | Adds `pkgs.unigif` |
-| `devShells.<system>.default` | Go, Node, ffmpeg, sqlite, sqlc, goose, golangci-lint, Playwright browsers |
-| `checks.<system>.*` | Go tests, web tests, lint, and the NixOS VM test |
+| `devShells.<system>.default` | Rust toolchain (cargo, rustc, clippy, rustfmt, rust-analyzer), `sqlx-cli`, `cargo-nextest`, Node, ffmpeg, sqlite, Playwright browsers |
+| `checks.<system>.*` | `cargo test`, `clippy`, `rustfmt`, web tests, and the NixOS VM test |
 | `formatter.<system>` | `nixfmt` |
 | `apps.<system>.default` | `nix run` starts a local instance with a temporary data directory |
 
 Systems: `x86_64-linux` and `aarch64-linux`.
+
+Build notes:
+
+- The Nix build runs with `SQLX_OFFLINE=true` and the committed `.sqlx/` metadata, because the sandbox has no database. CI fails if `.sqlx/` is out of date (`cargo sqlx prepare --check`).
+- SQLite is compiled in (bundled), so the binary has no runtime library dependency beyond libc.
+- Only nixpkgs is a flake input. If incremental CI builds become slow, switching the package to `crane` is a contained change.
 
 ### 10.2 Module options (`services.unigif`)
 
@@ -820,7 +828,9 @@ Boots a NixOS VM with the module and nginx, then:
 
 ---
 
-## 11. Telegram integration (after the storage service)
+## 11. Telegram integration (deferred, notes only)
+
+Not scheduled. The owner will pick this up after the storage service is running. Nothing in M0 to M7 depends on it. These notes are kept so the research is not lost.
 
 How Telegram works here, confirmed during research:
 
@@ -828,15 +838,14 @@ How Telegram works here, confirmed during research:
 - The saved list is read with `messages.getSavedGifs`, changed with `messages.saveGif`, and changes are announced by the `updateSavedGifs` update.
 - Telegram caps saved GIFs (client defaults: 200, or 400 with Premium) and drops the oldest when the cap is passed. Unigif removes that ceiling.
 
-Three routes, in the order I recommend building them.
+Three possible routes, from least to most effort.
 
 ### Route A: a bot (no client changes)
 
 - **Save**: forward or send a GIF to your private bot. It downloads the file and calls quick add with `source=telegram`. Access is limited to your Telegram user ID.
 - **Send**: inline mode. Typing `@yourbot cat` in any chat on any Telegram client shows your Unigif results for `#cat`.
-- Constraint: inline results given by URL are limited to 1 MB per the Bot API client documentation **(verify against the official Bot API page)**. So the bot uploads each MP4 to Telegram once (to a private storage chat), stores the returned `file_id` in `external_refs`, and answers inline queries with cached-file results. This also makes results appear instantly.
+- Constraint: inline results given by URL are limited to 1 MB per the Bot API client documentation **(verify against the official Bot API page)**. So the bot uploads each MP4 to Telegram once (to a private storage chat), stores the returned `file_id` (in a small `external_refs` table added by migration at that point), and answers inline queries with cached-file results. This also makes results appear instantly.
 - Bot downloads have a file-size limit on the hosted Bot API **(verify; commonly 20 MB)**, comfortably above normal GIF sizes.
-- Runs as `unigif telegram-bot`, enabled with `services.unigif.telegram.bot.enable` and a `tokenFile`.
 
 ### Route B: saved-GIFs sync daemon (the literal "Add to my GIFs" behaviour, on every client)
 
@@ -851,7 +860,7 @@ Three routes, in the order I recommend building them.
 - **Android**: exteraGram has a built-in Python plugin engine (Python 3.11, hooks on app methods, pure-Python dependencies only). A plugin hooks the save-GIF action and calls quick add. AyuGram-compatible plugin tooling exists in the community. Desktop plugin engines are still in development in forks, so a desktop plugin cannot be relied on yet **(verify state at the time)**.
 - These clients ship the **Uploader** or **Picker** key, never a full one.
 
-What this requires from v1, all already in the design: raw-body quick add, idempotency by `source_id`, the upload-only scope, small preview variants, `external_refs`, and the event stream so the Unsorted badge updates the moment a GIF arrives.
+What any of these will need from v1, all already in the design: raw-body quick add, idempotency by `source_id`, the upload-only scope, small preview variants, and the event stream so the Unsorted badge updates the moment a GIF arrives.
 
 ---
 
@@ -874,18 +883,18 @@ Sizes are relative (S / M / L), not time estimates.
 
 | # | Milestone | Size | Done when |
 |---|---|---|---|
-| M0 | **Skeleton**: flake, dev shell, CI, Go server serving an embedded empty SPA, `nix build` and `nix run` work | S | A fresh clone builds and starts with one command |
+| M0 | **Skeleton**: MIT `LICENSE`, flake, dev shell, CI, Rust server serving an embedded empty SPA, `nix build` and `nix run` work | S | A fresh clone builds and starts with one command |
 | M1 | **Storage core**: schema, migrations, ingest pipeline, stored variants, dedupe, media serving, `import` and `doctor` | L | `curl` quick add of a GIF yields `full.mp4`, `preview.mp4`, `poster.webp`; Range requests work; the same file twice returns `duplicate` |
 | M2 | **Auth and API**: login, sessions, API keys with scopes and `deny_tags`, rate limits, all section 8 endpoints, OpenAPI served | L | Contract tests pass against `openapi.yaml`; a `read` key gets `403` on upload |
 | M3 | **Web UI**: login, Library, search, Unsorted, tag sheet with every key in 9.4, upload by drag and paste, detail view | L | An end-to-end test sorts three GIFs using only the keyboard |
 | M4 | **Mobile and PWA**: responsive layout, bottom bar, full-screen tag sheet, gestures, installable, Android share target | M | The same sorting test passes in a phone viewport; a shared GIF lands in Unsorted |
 | M5 | **Conversion**: on-demand GIF / WebM / WebP, cache with eviction, share page with OpenGraph, storage stats | M | `full.gif` is generated once and served from cache after; the cache stays under its limit |
 | M6 | **NixOS**: module, hardening, nginx integration, backup timer, VM test, deployment guide | M | The VM test in 10.4 passes; the service runs on the VPS |
-| M7 | **Polish**: hashtag management (rename, merge), trash, batch select, co-occurrence suggestions, live updates over SSE, API key screen refinements | M | |
-| M8 | **Telegram A and B**: bot (save and inline), saved-GIFs sync daemon, their module options | L | "Add to my GIFs" on a phone puts the GIF in Unsorted |
-| M9 | **Clients and provider**: Telegram Desktop patch, Android plugin, Tenor/Klipy-shaped adapter, integration into the social network | L | |
+| M7 | **Polish**: hashtag management (rename, merge), trash, batch select, co-occurrence suggestions, live updates over SSE, API key screen refinements | M | Renaming or merging a hashtag updates every GIF; a GIF added through the API appears in an open Unsorted tab without a reload |
 
 M0 to M6 are the "storage accessor" you asked for first. Packaging is kept working from M0 onward; M6 finishes and hardens it rather than starting it.
+
+**Later, not scheduled**: Telegram integration (section 11), a Tenor/Klipy-shaped adapter, and wiring Unigif into the social network as its GIF provider.
 
 ### Testing
 
@@ -908,17 +917,19 @@ M0 to M6 are the "storage accessor" you asked for first. Packaging is kept worki
 | A GIF with thousands of unique colours or noise can be larger as MP4 than expected, or look worse | CRF is a setting; the pipeline keeps the smaller of "re-encode" and "original" when the original is already a video |
 | Public media URLs | Unguessable IDs; optional private mode; per-key hidden hashtags for anything sensitive |
 | ffmpeg on untrusted input | Limits before decode, timeout, sandbox, memory cap |
-| Telegram details change (limits, client code layout, plugin engines) | Route A and B rely only on documented API; everything marked **(verify)** is re-checked at M8/M9 |
+| Telegram details change (limits, client code layout, plugin engines) | Deferred; everything marked **(verify)** is re-checked when that work starts |
 | SQLite write contention | One writer, short transactions, WAL; ingest work happens outside transactions |
+| Rust compile times slow the edit-run loop | Single crate, `cargo check` and `nextest` in the dev shell, the web UI runs on the Vite dev server against a running backend |
+| `.sqlx/` metadata drifts from the queries | CI runs `cargo sqlx prepare --check` |
 
-**Please confirm or correct**
+**Confirmed by the owner (2026-11-12)**
 
-1. **Stack**: Go + SQLite + Svelte, as one binary. If you would rather have Rust or a server-rendered UI, say so before M0.
-2. **Media visibility**: public by unguessable URL (my recommendation, needed for embeds), or private by default?
-3. **One library per instance**: friends get read keys to your library and do not have their own. Correct?
-4. **Originals**: discard after conversion except for transparent GIFs. Or keep everything?
-5. **Telegram order**: bot and sync daemon first (work on every client, no fork to maintain), client mods after. Agreed?
-6. **Licence** for the repository (AGPL-3.0 fits a self-hosted service; MIT if you want it permissive).
+1. **Stack**: no Go. Rust + SQLite + Svelte, as one binary. Rust was my pick among the remaining options because it keeps the single-binary, low-memory, easily sandboxed design unchanged.
+2. **Media visibility**: public by unguessable URL.
+3. **Tenancy**: one library per instance; friends get read keys to it.
+4. **Originals**: discarded after conversion, except for transparent GIFs.
+5. **Telegram**: deferred entirely; not part of this plan's schedule.
+6. **Licence**: MIT.
 
 ---
 
