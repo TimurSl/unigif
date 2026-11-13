@@ -40,6 +40,7 @@
   main {
     min-height: 100dvh;
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     place-items: center;
     padding: 24px;
   }

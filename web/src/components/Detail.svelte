@@ -205,6 +205,8 @@
     inset: 0;
     z-index: 40;
     display: grid;
+    /* minmax(0, …): the sheet's 100% is the screen, not the width of its widest row. */
+    grid-template-columns: minmax(0, 1fr);
     place-items: center;
     padding: 24px;
     background: rgb(0 0 0 / 0.72);
