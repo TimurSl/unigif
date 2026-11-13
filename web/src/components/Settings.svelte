@@ -246,6 +246,8 @@
     overflow-y: auto;
     padding: 16px;
     display: grid;
+    /* One column that never grows past the screen: an implicit auto column widens to its widest child. */
+    grid-template-columns: minmax(0, 1fr);
     align-content: start;
     gap: 16px;
   }

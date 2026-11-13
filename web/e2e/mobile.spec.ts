@@ -318,3 +318,41 @@ test('phone, reduced motion: tiles show posters, the first tap plays, the second
   await tile.tap();
   await expect(page.getByRole('dialog', { name: 'GIF details' })).toBeVisible();
 });
+
+test('phone, narrow screen: a long row of recent hashtags or a saved search key does not widen the screen', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 780 });
+  await login(page);
+
+  // More recent hashtags than fit across, and a saved key (so Settings shows Save and Remove side by side).
+  const [first] = (await (await page.request.get('/api/v1/gifs?sort=old')).json()).items;
+  const many = ['narrow_one', 'narrow_two', 'narrow_three', 'narrow_four', 'narrow_five', 'narrow_six'];
+  expect((await page.request.post(`/api/v1/gifs/${first.id}/tags`, { data: { add: many } })).ok()).toBe(true);
+  expect((await page.request.put('/api/v1/search/providers/klipy/key', { data: { key: 'e2e-key' } })).ok()).toBe(true);
+
+  /** How far anything sticks out sideways, the page itself or a scroll container inside it. */
+  const sideways = () =>
+    page.evaluate(() =>
+      Math.max(
+        document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        ...[...document.querySelectorAll<HTMLElement>('body *')]
+          .filter((el) => /auto|scroll/.test(getComputedStyle(el).overflowX))
+          .filter((el) => !el.matches('.recent, .hashtags')) // the chip strips scroll sideways on purpose
+          .map((el) => el.scrollWidth - el.clientWidth),
+      ),
+    );
+
+  await page.getByTestId('file-input').setInputFiles(fixtures()[5]);
+  await expect.poll(() => readyCount(page, 'status=ready&unsorted=true')).toBeGreaterThan(0);
+  await tabBar(page).getByRole('link', { name: /Unsorted/ }).tap();
+  await page.getByRole('button', { name: 'Start sorting' }).tap();
+  const sheet = page.getByRole('dialog', { name: /Unsorted/ });
+  await expect(sheet.getByRole('button', { name: '#narrow_six', exact: true })).toBeAttached();
+  expect((await sheet.boundingBox())!.width).toBeCloseTo(360, 0);
+  await expect(sheet.getByRole('button', { name: 'Close' })).toBeInViewport();
+  expect(await sideways()).toBeLessThanOrEqual(0);
+  await sheet.getByRole('button', { name: 'Close' }).tap();
+
+  await tabBar(page).getByRole('link', { name: 'Settings' }).tap();
+  await expect(page.getByTestId('search-settings').getByRole('button', { name: 'Remove' })).toBeVisible();
+  expect(await sideways()).toBeLessThanOrEqual(0);
+});

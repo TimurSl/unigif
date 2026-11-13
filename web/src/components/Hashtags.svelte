@@ -236,6 +236,8 @@
     /* Rows take their content's height; without this a fixed-height grid squeezes the clipped lists. */
     grid-auto-rows: max-content;
     display: grid;
+    /* One column that never grows past the screen: an implicit auto column widens to its widest child. */
+    grid-template-columns: minmax(0, 1fr);
     gap: 12px;
   }
   .page > * {
