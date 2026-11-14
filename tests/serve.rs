@@ -79,6 +79,26 @@ async fn range_requests_work() {
 }
 
 #[tokio::test]
+async fn video_is_never_gzipped() {
+    // Gzipped video loses Content-Length and Range support; Telegram Desktop
+    // then stops reading early and gets a truncated preview.
+    let h = Harness::new().await;
+    let v = ready_gif(&h).await;
+    for key in ["mp4", "preview_mp4"] {
+        let url = v["media"][key]["url"].as_str().unwrap();
+        let req = Request::get(url).header(header::ACCEPT_ENCODING, "gzip").body(Body::empty()).unwrap();
+        let resp = h.send(req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let hd = resp.headers().clone();
+        assert!(hd.get(header::CONTENT_ENCODING).is_none(), "{key} was compressed");
+        assert_eq!(hd[header::ACCEPT_RANGES], "bytes");
+        let len = v["media"][key]["bytes"].as_i64().unwrap();
+        assert_eq!(hd[header::CONTENT_LENGTH], len.to_string());
+        assert_eq!(bytes(resp).await.len() as i64, len);
+    }
+}
+
+#[tokio::test]
 async fn only_known_variants_of_known_ids_are_served() {
     let h = Harness::new().await;
     let v = ready_gif(&h).await;

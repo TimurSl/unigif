@@ -5,6 +5,7 @@ use axum::http::{header, HeaderName, HeaderValue, Method};
 use axum::middleware::from_fn_with_state;
 use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
+use tower_http::compression::predicate::{DefaultPredicate, NotForContentType, Predicate};
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::set_header::SetResponseHeaderLayer;
@@ -107,7 +108,17 @@ pub fn router(app: App) -> Router {
         .route("/healthz", get(|| async { "ok" }))
         .route("/readyz", get(readyz))
         .fallback(web::handler)
-        .layer(CompressionLayer::new().gzip(true).no_br().no_deflate().no_zstd())
+        // Media is already compressed. Gzipping it saves nothing and drops
+        // Content-Length and Range support, which breaks clients that rely on
+        // them (Telegram Desktop cuts gzipped previews short).
+        .layer(
+            CompressionLayer::new()
+                .gzip(true)
+                .no_br()
+                .no_deflate()
+                .no_zstd()
+                .compress_when(DefaultPredicate::new().and(NotForContentType::const_new("video/"))),
+        )
         .layer(header("x-content-type-options", "nosniff"))
         .layer(header("referrer-policy", "no-referrer"))
         .layer(header("content-security-policy", CSP))
