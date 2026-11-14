@@ -28,6 +28,34 @@
   let lastPicked: string | null = null;
   let saving = $state(false);
 
+  // Masonry: each result goes into the shortest column when it arrives. The placement of an item
+  // depends only on the items before it, so a new page appends below and nothing already on screen
+  // moves (CSS `columns` would rebalance every column on each page).
+  const GAP = 12;
+  const MIN_COL = 220;
+  const phoneQuery = matchMedia('(max-width: 639px)');
+  let phone = $state(phoneQuery.matches);
+  $effect(() => {
+    const on = () => (phone = phoneQuery.matches);
+    phoneQuery.addEventListener('change', on);
+    return () => phoneQuery.removeEventListener('change', on);
+  });
+  let gridWidth = $state(0);
+  const cols = $derived(phone ? 2 : Math.max(1, Math.floor((gridWidth + GAP) / (MIN_COL + GAP))));
+  const columns = $derived.by(() => {
+    const out: SearchItem[][] = Array.from({ length: cols }, () => []);
+    // Heights in units of the column width (all columns are equally wide).
+    const heights = new Array<number>(cols).fill(0);
+    const colW = Math.max(1, (gridWidth - GAP * (cols - 1)) / cols);
+    for (const item of items) {
+      let c = 0;
+      for (let i = 1; i < cols; i++) if (heights[i] < heights[c] - 1e-6) c = i;
+      out[c].push(item);
+      heights[c] += (item.width && item.height ? item.height / item.width : 1) + GAP / colW;
+    }
+    return out;
+  });
+
   const provider = $derived(providers?.find((p) => p.id === route.provider) ?? providers?.find((p) => p.configured) ?? providers?.[0] ?? null);
   const tags = $derived(
     tagsDraft
@@ -271,16 +299,20 @@
       </div>
     {:else}
       {#if !route.q && items.length}<p class="muted label">Trending on {provider?.name}</p>{/if}
-      <div class="grid">
-        {#each items as item (item.id)}
-          <SearchTile
-            {item}
-            status={status(item)}
-            onadd={(i) => void add(i)}
-            {selecting}
-            selected={picked.includes(item.id)}
-            ontoggle={toggle}
-          />
+      <div class="grid" bind:clientWidth={gridWidth}>
+        {#each columns as column, c (c)}
+          <div class="col">
+            {#each column as item (item.id)}
+              <SearchTile
+                {item}
+                status={status(item)}
+                onadd={(i) => void add(i)}
+                {selecting}
+                selected={picked.includes(item.id)}
+                ontoggle={toggle}
+              />
+            {/each}
+          </div>
         {/each}
       </div>
       {#if loading}<p class="status">Loading…</p>{/if}
@@ -403,8 +435,13 @@
     padding: 0 16px 16px;
   }
   .grid {
-    columns: 220px;
-    column-gap: 12px;
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .col {
+    flex: 1;
+    min-width: 0;
   }
   .label {
     margin: 0 0 8px;
@@ -447,9 +484,6 @@
     .results {
       padding-left: 12px;
       padding-right: 12px;
-    }
-    .grid {
-      columns: 2;
     }
     kbd,
     .hint {
