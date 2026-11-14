@@ -97,7 +97,6 @@
     border-radius: var(--radius-tile);
     background: var(--surface-1);
     border: 1px solid var(--border);
-    break-inside: avoid;
     margin-bottom: 12px;
   }
   video,
